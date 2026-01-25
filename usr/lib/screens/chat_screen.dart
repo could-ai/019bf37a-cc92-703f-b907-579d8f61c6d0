@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import '../integrations/supabase.dart';
 
 class ChatMessage {
   final String id;
@@ -42,7 +43,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   bool _isComposing = false;
   bool _isListening = false;
   final _supabase = Supabase.instance.client;
-  final _recorder = Record();
+  final _recorder = AudioRecorder(); // Changed from Record() to AudioRecorder() for v5
   String? _audioPath;
 
   @override
@@ -122,10 +123,15 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   Future<void> _transcribeAudio(String path) async {
     try {
       final file = File(path);
+      if (!await file.exists()) return;
+      
       final bytes = await file.readAsBytes();
-      final uri = Uri.parse('${Supabase.instance.client.supabaseUrl}/functions/v1/transcribe');
+      
+      // Use SupabaseConfig for URL and Key
+      final uri = Uri.parse('${SupabaseConfig.supabaseUrl}/functions/v1/transcribe');
+      
       final request = http.MultipartRequest('POST', uri)
-        ..headers['Authorization'] = 'Bearer ${Supabase.instance.client.supabaseKey}'
+        ..headers['Authorization'] = 'Bearer ${SupabaseConfig.supabaseAnonKey}'
         ..files.add(http.MultipartFile.fromBytes('audio', bytes, filename: 'audio.wav'));
 
       final response = await request.send();
@@ -134,7 +140,9 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       if (response.statusCode == 200) {
         final json = jsonDecode(respStr);
         final text = json['text'];
-        _handleSubmitted(text);
+        if (text != null && text.toString().isNotEmpty) {
+           _handleSubmitted(text);
+        }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -161,9 +169,10 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   void _toggleVoiceInput() async {
     if (_isListening) {
       // Stop recording
-      _audioPath = await _recorder.stop();
+      final path = await _recorder.stop();
       setState(() {
         _isListening = false;
+        _audioPath = path;
       });
       if (_audioPath != null) {
         await _transcribeAudio(_audioPath!);
@@ -172,17 +181,23 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       // Start recording
       if (await _recorder.hasPermission()) {
         final tempDir = await getTemporaryDirectory();
-        final path = '${tempDir.path}/audio.wav';
-        await _recorder.start(path: path);
+        final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
+        
+        // Start recording with config
+        const config = RecordConfig(encoder: AudioEncoder.wav);
+        await _recorder.start(config, path: path);
+        
         setState(() {
           _isListening = true;
         });
+        
         // Auto-stop after 30 seconds
         Future.delayed(const Duration(seconds: 30), () async {
           if (_isListening && mounted) {
-            _audioPath = await _recorder.stop();
+            final path = await _recorder.stop();
             setState(() {
               _isListening = false;
+              _audioPath = path;
             });
             if (_audioPath != null) {
               await _transcribeAudio(_audioPath!);
@@ -298,7 +313,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
                 final data = snapshot.data!;
                 
-                // 如果没有消息，显示欢迎语（本地显示，不存库，或者你可以选择存库）
+                // 如果没有消息，显示欢迎语
                 if (data.isEmpty) {
                   return Center(
                     child: Padding(
