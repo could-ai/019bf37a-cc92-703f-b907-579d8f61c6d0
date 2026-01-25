@@ -1,27 +1,32 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
+    // Get the request body
     const { messages } = await req.json()
+    
+    // Get the API key from secrets
     const apiKey = Deno.env.get('GROK_API_KEY')
-
     if (!apiKey) {
-      throw new Error('GROK_API_KEY is not set')
+      console.error('GROK_API_KEY is not set')
+      return new Response(
+        JSON.stringify({ error: 'Server configuration error: API Key missing' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
-    // Prepare the payload for Grok (xAI)
-    // The user requested sending ONLY user messages as history.
-    // messages array should already be filtered by the client, but we can ensure structure here.
-    
+    // Call Grok API
+    // Using 'grok-2-latest' as it is the current stable model, or fallback to 'grok-beta'
     const response = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -29,29 +34,38 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'grok-beta', // Using grok-beta as the model
+        model: 'grok-2-latest', 
         messages: messages,
-        stream: false,
-        temperature: 0.7
+        temperature: 0.7,
       }),
     })
 
+    const data = await response.json()
+
     if (!response.ok) {
-      const errorData = await response.text()
-      console.error('Grok API Error:', errorData)
-      throw new Error(`Grok API Error: ${response.status} ${errorData}`)
+      console.error('Grok API Error:', data)
+      return new Response(
+        JSON.stringify({ error: `Grok API Error: ${data.error?.message || response.statusText}` }),
+        { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
-    const data = await response.json()
-    const reply = data.choices[0].message.content
+    // Extract the reply
+    const reply = data.choices?.[0]?.message?.content
+    if (!reply) {
+      throw new Error('Invalid response format from Grok API')
+    }
 
-    return new Response(JSON.stringify({ reply }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    return new Response(
+      JSON.stringify({ reply }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    )
+
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    console.error('Function Error:', error)
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    )
   }
 })
