@@ -190,11 +190,11 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       if (mounted) {
         if (e.status == 401) {
            ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Session expired. Please logout and login again.'),
+            SnackBar(
+              content: const Text('Session expired. Please logout and login again.'),
               backgroundColor: Colors.red,
-              duration: Duration(seconds: 5),
-              action: SnackBarAction(label: 'Logout', onPressed: _signOut), // Static method call issue, need to fix
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(label: 'Logout', onPressed: _signOut),
             ),
           );
         } else {
