@@ -41,11 +41,30 @@ class _AuthScreenState extends State<AuthScreen> {
           email: email,
           password: password,
         );
+        
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Registration successful! Please log in.')),
+          // Show a dialog to inform the user about email verification
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Verification Required'),
+              content: Text(
+                'Registration successful!\n\n'
+                'We have sent a confirmation email to $email.\n'
+                'Please check your inbox (and spam folder) and click the link to verify your account before logging in.'
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
           );
-          // Optionally switch to login mode or auto-login if email confirmation is off
+
+          // Switch to login mode
           setState(() {
             _isLogin = true;
           });
