@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:http/http.dart' as http;
@@ -206,6 +207,26 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             const SnackBar(content: Text('Microphone permission denied')),
           );
         }
+      }
+    } on MissingPluginException {
+      // Catch MissingPluginException specifically to guide the user
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Restart Required'),
+            content: const Text(
+              'The audio recording feature requires a full app restart to initialize the new native plugins.\n\n'
+              'Please stop the app completely and run it again.'
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
     } catch (e) {
       print('Error starting record: $e');
