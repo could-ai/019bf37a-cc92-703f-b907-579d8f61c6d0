@@ -54,6 +54,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   @override
   void initState() {
     super.initState();
+    _checkPermissions();
   }
 
   @override
@@ -61,6 +62,22 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     _recordingTimer?.cancel();
     _recorder.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkPermissions() async {
+    try {
+      final hasPermission = await _recorder.hasPermission();
+      print('录音权限检查: $hasPermission');
+      if (!hasPermission) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('需要麦克风权限才能使用语音功能')),
+          );
+        }
+      }
+    } catch (e) {
+      print('权限检查错误: $e');
+    }
   }
 
   Future<void> _signOut() async {
@@ -127,18 +144,24 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   }
 
   Future<void> _transcribeAudio(String path) async {
+    print('开始转录音频: $path');
     setState(() {
       _isTranscribing = true;
     });
 
     try {
       final file = File(path);
-      if (!await file.exists()) return;
+      if (!await file.exists()) {
+        print('音频文件不存在');
+        return;
+      }
       
       final bytes = await file.readAsBytes();
+      print('音频文件大小: ${bytes.length} bytes');
       
       // Use SupabaseConfig for URL and Key
       final uri = Uri.parse('${SupabaseConfig.supabaseUrl}/functions/v1/transcribe');
+      print('发送请求到: $uri');
       
       final request = http.MultipartRequest('POST', uri)
         ..headers['Authorization'] = 'Bearer ${SupabaseConfig.supabaseAnonKey}'
@@ -146,10 +169,13 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
       final response = await request.send();
       final respStr = await response.stream.bytesToString();
+      print('响应状态码: ${response.statusCode}');
+      print('响应内容: $respStr');
 
       if (response.statusCode == 200) {
         final json = jsonDecode(respStr);
         final text = json['text'];
+        print('转录结果: $text');
         if (text != null && text.toString().isNotEmpty) {
            _handleSubmitted(text);
         }
@@ -179,6 +205,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         }
       }
     } catch (e) {
+      print('转录错误: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error transcribing audio: $e')),
@@ -221,10 +248,13 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   }
 
   void _startRecording() async {
+    print('尝试开始录音...');
     try {
       if (await _recorder.hasPermission()) {
+        print('有录音权限，开始录音');
         final tempDir = await getTemporaryDirectory();
         final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
+        print('录音文件路径: $path');
         
         // Use WAV encoder for compatibility
         const config = RecordConfig(encoder: AudioEncoder.wav);
@@ -241,51 +271,41 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             _recordDurationSeconds++;
           });
           if (_recordDurationSeconds >= 30) {
+            print('达到30秒限制，自动停止');
             _stopRecording();
           }
         });
       } else {
+        print('没有录音权限');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Microphone permission denied')),
+            const SnackBar(content: Text('需要麦克风权限才能使用语音功能')),
           );
         }
       }
-    } on MissingPluginException {
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Restart Required'),
-            content: const Text(
-              'The audio recording feature requires a full app restart to initialize the new native plugins.\n\n'
-              'Please stop the app completely and run it again.'
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
-      }
     } catch (e) {
-      print('Error starting record: $e');
+      print('录音错误: $e');
+      print('错误类型: ${e.runtimeType}');
+      print('错误堆栈: ${StackTrace.current}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error starting record: $e')),
+          SnackBar(content: Text('录音失败: $e')),
         );
       }
     }
   }
 
   void _stopRecording() async {
+    print('停止录音...');
     _recordingTimer?.cancel();
-    if (!_isListening) return;
+    if (!_isListening) {
+      print('当前未在录音状态');
+      return;
+    }
 
     try {
       final path = await _recorder.stop();
+      print('录音停止，文件路径: $path');
       setState(() {
         _isListening = false;
         _audioPath = path;
@@ -294,11 +314,12 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         await _transcribeAudio(_audioPath!);
       }
     } catch (e) {
-      print('Error stopping record: $e');
+      print('停止录音错误: $e');
     }
   }
 
   void _cancelRecording() async {
+    print('取消录音');
     _recordingTimer?.cancel();
     if (!_isListening) return;
     
@@ -323,13 +344,20 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         child: Row(
           children: [
             GestureDetector(
-              onLongPressStart: (_) => _startRecording(),
-              onLongPressEnd: (_) => _stopRecording(),
+              onLongPressStart: (_) {
+                print('长按开始录音');
+                _startRecording();
+              },
+              onLongPressEnd: (_) {
+                print('长按结束停止录音');
+                _stopRecording();
+              },
               child: IconButton(
                 icon: Icon(_isListening ? Icons.stop_circle_outlined : Icons.mic_none),
                 color: _isListening ? Colors.red : Theme.of(context).colorScheme.secondary,
                 iconSize: _isListening ? 32 : 24,
                 onPressed: () {
+                  print('点击语音按钮，当前状态: ${_isListening ? "录音中" : "未录音"}');
                   if (_isListening) {
                     _stopRecording();
                   } else {
