@@ -158,17 +158,14 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       }).toList();
 
       // Add the current message if it's not already in the DB (it should be, but just in case of race conditions or if we want to be explicit)
-      // Since we save before calling this, it might be in historyData if the DB is fast enough. 
-      // To be safe and ensure the latest prompt is there, we can check or just rely on the fact that we just saved it.
-      // However, the query above might miss the *just* inserted message if replication is slow.
-      // Let's manually append the current message if it's not the last one in history.
-      
       if (messages.isEmpty || messages.last['content'] != userMessage) {
         messages.add({
           'role': 'user',
           'content': userMessage,
         });
       }
+
+      print('Sending to AI: ${messages.length} messages');
 
       // 2. Call the Edge Function
       final response = await _supabase.functions.invoke(
@@ -177,7 +174,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       );
 
       if (response.status != 200) {
-        throw Exception('Failed to get response from AI: ${response.status}');
+        throw Exception('Failed to get response from AI: ${response.status} ${response.data}');
       }
 
       final data = response.data;
@@ -190,6 +187,23 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         throw Exception('Invalid response format from AI');
       }
 
+    } on FunctionException catch (e) {
+      print('Function Error: ${e.status} ${e.details} ${e.reasonPhrase}');
+      if (mounted) {
+        if (e.status == 401) {
+           ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Authentication error. Please try logging out and back in.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('AI Error: ${e.details ?? e.reasonPhrase}'), backgroundColor: Colors.red),
+          );
+        }
+      }
     } catch (e) {
       print('AI Error: $e');
       if (mounted) {
