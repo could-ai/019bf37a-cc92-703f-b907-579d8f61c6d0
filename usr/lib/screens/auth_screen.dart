@@ -103,20 +103,42 @@ class _AuthScreenState extends State<AuthScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Logo and Branding
                 Icon(
-                  Icons.lock_outline_rounded,
+                  Icons.psychology, // Brain icon representing memory/AI
                   size: 80,
                   color: Theme.of(context).colorScheme.primary,
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 16),
+                Text(
+                  'Memo',
+                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Your personal AI memory assistant.\nCapture thoughts, search memories, and ask anything.',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 48),
+                
+                // Auth Form Header
                 Text(
                   _isLogin ? 'Welcome Back' : 'Create Account',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
+                
+                // Inputs
                 TextField(
                   controller: _emailController,
                   decoration: const InputDecoration(
@@ -138,6 +160,8 @@ class _AuthScreenState extends State<AuthScreen> {
                   obscureText: true,
                 ),
                 const SizedBox(height: 24),
+                
+                // Action Button
                 FilledButton(
                   onPressed: _isLoading ? null : _submit,
                   style: FilledButton.styleFrom(
@@ -155,6 +179,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       : Text(_isLogin ? 'Login' : 'Sign Up'),
                 ),
                 const SizedBox(height: 16),
+                
+                // Toggle Mode
                 TextButton(
                   onPressed: () {
                     setState(() {
