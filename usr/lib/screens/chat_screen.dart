@@ -205,10 +205,10 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Setup Required'),
         content: const Text(
-          'To use the voice feature, you need to set up the Groq API Key (Free).\n\n'
-          '1. Go to console.groq.com and get a free API Key.\n'
+          'To use the voice feature, you need to set up the Deepgram API Key.\n\n'
+          '1. Go to console.deepgram.com and get an API Key.\n'
           '2. Go to your Supabase Dashboard -> Edge Functions -> Secrets.\n'
-          '3. Add a new secret named "GROQ_API_KEY" with your key value.'
+          '3. Add a new secret named "DEEPGRAM_API_KEY" with your key value.'
         ),
         actions: [
           TextButton(
@@ -399,6 +399,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                                 });
                               },
                               onSubmitted: _handleSubmitted,
+                              textInputAction: TextInputAction.send,
                               decoration: const InputDecoration(
                                 hintText: 'Tell or ask Memo something',
                                 border: InputBorder.none,
