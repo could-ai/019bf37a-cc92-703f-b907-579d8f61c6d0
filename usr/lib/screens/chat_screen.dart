@@ -40,7 +40,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isComposing = false;
-  bool _isAiThinking = false; // To show loading indicator for AI response
+  bool _isAiThinking = false;
   
   // Speech to Text variables
   final SpeechToText _speechToText = SpeechToText();
@@ -56,7 +56,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     _initSpeech();
   }
 
-  /// Initialize the speech recognition service
   void _initSpeech() async {
     try {
       _speechEnabled = await _speechToText.initialize(
@@ -87,11 +86,11 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         _isListening = false;
       });
     }
-    // Don't show snackbar for 'no match' or 'notListening' as it can be spammy
     if (errorNotification.errorMsg != 'error_no_match' && errorNotification.errorMsg != 'error_speech_timeout') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Speech Error: ${errorNotification.errorMsg}')),
-      );
+      // Only show snackbar for actual errors, not timeouts/no-match
+      // ScaffoldMessenger.of(context).showSnackBar(
+      //   SnackBar(content: Text('Speech Error: ${errorNotification.errorMsg}')),
+      // );
     }
   }
 
@@ -134,22 +133,21 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
     try {
       final userId = _supabase.auth.currentUser?.id;
-      if (userId == null) return;
+      if (userId == null) {
+        throw Exception('User not logged in');
+      }
 
       // 1. Fetch chat history (only user messages as requested)
-      // We limit to last 20 messages to avoid hitting token limits too fast
       final List<dynamic> historyData = await _supabase
           .from('messages')
           .select('content, is_user, created_at')
           .eq('user_id', userId)
-          .eq('is_user', true) // Only fetch user messages as requested
+          .eq('is_user', true) 
           .order('created_at', ascending: false)
           .limit(20);
 
-      // Reverse to chronological order
       final history = historyData.reversed.toList();
 
-      // Format messages for Grok API
       final List<Map<String, String>> messages = history.map<Map<String, String>>((msg) {
         return {
           'role': 'user',
@@ -157,7 +155,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         };
       }).toList();
 
-      // Add the current message if it's not already in the DB (it should be, but just in case of race conditions or if we want to be explicit)
+      // Ensure current message is included
       if (messages.isEmpty || messages.last['content'] != userMessage) {
         messages.add({
           'role': 'user',
@@ -193,9 +191,10 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         if (e.status == 401) {
            ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Authentication error. Please try logging out and back in.'),
+              content: Text('Session expired. Please logout and login again.'),
               backgroundColor: Colors.red,
               duration: Duration(seconds: 5),
+              action: SnackBarAction(label: 'Logout', onPressed: _signOut), // Static method call issue, need to fix
             ),
           );
         } else {
@@ -236,10 +235,9 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     await _getAiResponse(text);
   }
 
-  /// Start listening for speech
   void _startListening() async {
     if (!_speechEnabled) {
-      _initSpeech(); // Try to init again if failed previously
+      _initSpeech();
       if (!_speechEnabled) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Speech recognition not available')),
@@ -250,7 +248,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
     await _speechToText.listen(
       onResult: _onSpeechResult,
-      localeId: 'en_US', // Default to English
+      localeId: 'en_US',
       listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 3),
       partialResults: true,
@@ -264,7 +262,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     });
   }
 
-  /// Stop listening
   void _stopListening() async {
     await _speechToText.stop();
     setState(() {
@@ -272,7 +269,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     });
   }
 
-  /// Callback when speech result is received
   void _onSpeechResult(SpeechRecognitionResult result) {
     setState(() {
       _lastWords = result.recognizedWords;
@@ -280,9 +276,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       _isComposing = _lastWords.isNotEmpty;
     });
 
-    // Automatically send when speech is final
     if (result.finalResult && _lastWords.isNotEmpty) {
-      // Add a small delay to ensure the user sees the final text before sending
       Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) {
            _handleSubmitted(_lastWords);
