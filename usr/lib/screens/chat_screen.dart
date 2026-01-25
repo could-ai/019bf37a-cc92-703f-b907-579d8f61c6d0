@@ -157,7 +157,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         };
       }).toList();
 
-      // Ensure current message is included
+      // Ensure current message is included if not already (it should be if saved first)
       if (messages.isEmpty || messages.last['content'] != userMessage) {
         messages.add({
           'role': 'user',
@@ -195,22 +195,37 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       print('Function Error: ${e.status} ${e.details} ${e.reasonPhrase}');
       if (mounted) {
         if (e.status == 401) {
-          // Force sign out on JWT error
-          await _signOut();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Session expired. You have been logged out. Please login again.'),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 5),
-              ),
-            );
-            // Navigate back to auth screen
-            Navigator.of(context).pushReplacementNamed('/');
-          }
-        } else {
+          // Only logout if it's strictly a 401 (Unauthorized)
+          // The Edge Function now returns 500 for API Key errors, so 401 should only be for Session Expiry
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('AI Error: ${e.details ?? e.reasonPhrase}'), backgroundColor: Colors.red),
+            SnackBar(
+              content: const Text('Session expired. Please login again.'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'Logout',
+                textColor: Colors.white,
+                onPressed: _signOut,
+              ),
+            ),
+          );
+          // We don't auto-logout immediately to let user see the message, 
+          // but usually 401 means subsequent requests will fail too.
+          await _signOut();
+        } else {
+          // Handle other errors (500, etc.)
+          String errorMessage = 'AI Error';
+          if (e.details != null && e.details is Map && e.details['error'] != null) {
+            errorMessage = e.details['error'];
+          } else {
+            errorMessage = 'AI Error: ${e.status} ${e.reasonPhrase}';
+          }
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage), 
+              backgroundColor: Colors.red
+            ),
           );
         }
       }
