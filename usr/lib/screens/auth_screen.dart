@@ -148,6 +148,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                   keyboardType: TextInputType.emailAddress,
                   autocorrect: false,
+                  textInputAction: TextInputAction.next,
                 ),
                 const SizedBox(height: 16),
                 TextField(
@@ -158,6 +159,8 @@ class _AuthScreenState extends State<AuthScreen> {
                     prefixIcon: Icon(Icons.lock_outline),
                   ),
                   obscureText: true,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _submit(),
                 ),
                 const SizedBox(height: 24),
                 
