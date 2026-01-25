@@ -157,7 +157,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         };
       }).toList();
 
-      // Ensure current message is included if not already (it should be if saved first)
+      // Ensure current message is included if not already
       if (messages.isEmpty || messages.last['content'] != userMessage) {
         messages.add({
           'role': 'user',
@@ -194,40 +194,24 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     } on FunctionException catch (e) {
       print('Function Error: ${e.status} ${e.details} ${e.reasonPhrase}');
       if (mounted) {
-        if (e.status == 401) {
-          // Only logout if it's strictly a 401 (Unauthorized)
-          // The Edge Function now returns 500 for API Key errors, so 401 should only be for Session Expiry
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Session expired. Please login again.'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 5),
-              action: SnackBarAction(
-                label: 'Logout',
-                textColor: Colors.white,
-                onPressed: _signOut,
-              ),
-            ),
-          );
-          // We don't auto-logout immediately to let user see the message, 
-          // but usually 401 means subsequent requests will fail too.
-          await _signOut();
-        } else {
-          // Handle other errors (500, etc.)
-          String errorMessage = 'AI Error';
-          if (e.details != null && e.details is Map && e.details['error'] != null) {
-            errorMessage = e.details['error'];
-          } else {
-            errorMessage = 'AI Error: ${e.status} ${e.reasonPhrase}';
-          }
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(errorMessage), 
-              backgroundColor: Colors.red
-            ),
-          );
+        // CRITICAL FIX: Do NOT auto-logout on 401. 
+        // Just show the error so the user can try again or debug.
+        // Auto-logout was causing a loop where any network/API error forced the user out.
+        
+        String errorMessage = 'AI Error (${e.status})';
+        if (e.details != null && e.details is Map && e.details['error'] != null) {
+          errorMessage = e.details['error'];
+        } else if (e.reasonPhrase != null) {
+          errorMessage += ': ${e.reasonPhrase}';
         }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage), 
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
       }
     } catch (e) {
       print('AI Error: $e');
