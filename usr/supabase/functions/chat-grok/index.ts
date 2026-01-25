@@ -1,40 +1,40 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-serve(async (req) => {
-  // 1. Handle CORS preflight
+Deno.serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
-    // 2. Parse body
+    // 1. Get the request body
     const { messages } = await req.json()
-
-    // 3. Validate input
-    if (!messages || !Array.isArray(messages)) {
+    
+    if (!messages) {
       return new Response(
-        JSON.stringify({ error: 'Messages array is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Messages are required' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       )
     }
 
-    // 4. Call Grok API
+    // 2. Get API Key
     const apiKey = Deno.env.get('GROK_API_KEY')
     if (!apiKey) {
-      console.error('Missing GROK_API_KEY')
+      console.error('GROK_API_KEY is missing')
       return new Response(
         JSON.stringify({ error: 'Server configuration error: Missing API Key' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
       )
     }
 
-    console.log('Sending request to Grok API...')
-    
+    console.log(`Sending ${messages.length} messages to Grok...`)
+
+    // 3. Call Grok API
     const response = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -42,47 +42,49 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'grok-2-latest',
+        model: 'grok-2-latest', // Or 'grok-beta'
         messages: messages,
-        stream: false
+        stream: false,
+        temperature: 0.7
       }),
     })
 
-    const data = await response.json()
-
+    // 4. Handle Grok API Response
     if (!response.ok) {
-      console.error('Grok API Error:', data)
-      // CRITICAL: Map 401 from Grok to 500 to avoid triggering client-side logout
-      // The client interprets 401 as "User Session Expired", but here it means "Invalid API Key"
-      const status = response.status === 401 ? 500 : response.status
+      const errorText = await response.text()
+      console.error(`Grok API Error (${response.status}):`, errorText)
       
+      // CRITICAL: Return 500 instead of 401 for upstream errors to avoid logging out the user
       return new Response(
         JSON.stringify({ 
-          error: `AI Provider Error (${response.status}): ${data.error?.message || 'Unknown error'}` 
+          error: `AI Provider Error: ${response.status}`,
+          details: errorText 
         }),
-        { status: status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
       )
     }
 
-    // 5. Return response
+    const data = await response.json()
     const reply = data.choices[0]?.message?.content
+
     if (!reply) {
       return new Response(
-        JSON.stringify({ error: 'No response from AI' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Empty response from AI' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
       )
     }
 
+    // 5. Success
     return new Response(
       JSON.stringify({ reply }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
 
   } catch (error) {
-    console.error('Function Error:', error)
+    console.error('Edge Function Error:', error)
     return new Response(
       JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     )
   }
 })
