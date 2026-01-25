@@ -1,5 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:record/record.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 class ChatMessage {
   final String id;
@@ -35,12 +40,20 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isComposing = false;
-  bool _isListening = false; // 模拟语音状态
+  bool _isListening = false;
   final _supabase = Supabase.instance.client;
+  final _recorder = Record();
+  String? _audioPath;
 
   @override
   void initState() {
     super.initState();
+  }
+
+  @override
+  void dispose() {
+    _recorder.dispose();
+    super.dispose();
   }
 
   Future<void> _signOut() async {
@@ -92,7 +105,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       String lowerText = text.toLowerCase();
 
       if (lowerText.startsWith('search') || lowerText.startsWith('find') || lowerText.contains('搜索')) {
-        responseText = "Searching your memories for: \"${text.replaceFirst(RegExp(r'search|find|搜索', caseSensitive: false), '').trim()}\"... \n(This is a demo search result)";
+        responseText = "Searching your memories for: \"${text.replaceFirst(RegExp(r'search|find|搜索', caseSensitive: false), '').trim()}\" ... \n(This is a demo search result)";
       } else if (lowerText.endsWith('?')) {
         responseText = "That's an interesting question. Based on what you've told me before, I think...";
       } else {
@@ -106,25 +119,83 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     });
   }
 
-  void _simulateVoiceInput() {
-    setState(() {
-      _isListening = !_isListening;
-    });
-    
-    if (_isListening) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Listening... (Voice UI Demo)')),
-      );
-      // 模拟3秒后自动结束录音并输入文字
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted && _isListening) {
-          setState(() {
-            _isListening = false;
-            _textController.text = "This is a simulated voice input.";
-            _isComposing = true;
-          });
+  Future<void> _transcribeAudio(String path) async {
+    try {
+      final file = File(path);
+      final bytes = await file.readAsBytes();
+      final uri = Uri.parse('${Supabase.instance.client.supabaseUrl}/functions/v1/transcribe');
+      final request = http.MultipartRequest('POST', uri)
+        ..headers['Authorization'] = 'Bearer ${Supabase.instance.client.supabaseKey}'
+        ..files.add(http.MultipartFile.fromBytes('audio', bytes, filename: 'audio.wav'));
+
+      final response = await request.send();
+      final respStr = await response.stream.bytesToString();
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(respStr);
+        final text = json['text'];
+        _handleSubmitted(text);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Transcription failed: $respStr')),
+          );
         }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error transcribing audio: $e')),
+        );
+      }
+    } finally {
+      // Clean up temp file
+      if (path.isNotEmpty) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
+    }
+  }
+
+  void _toggleVoiceInput() async {
+    if (_isListening) {
+      // Stop recording
+      _audioPath = await _recorder.stop();
+      setState(() {
+        _isListening = false;
       });
+      if (_audioPath != null) {
+        await _transcribeAudio(_audioPath!);
+      }
+    } else {
+      // Start recording
+      if (await _recorder.hasPermission()) {
+        final tempDir = await getTemporaryDirectory();
+        final path = '${tempDir.path}/audio.wav';
+        await _recorder.start(path: path);
+        setState(() {
+          _isListening = true;
+        });
+        // Auto-stop after 30 seconds
+        Future.delayed(const Duration(seconds: 30), () async {
+          if (_isListening && mounted) {
+            _audioPath = await _recorder.stop();
+            setState(() {
+              _isListening = false;
+            });
+            if (_audioPath != null) {
+              await _transcribeAudio(_audioPath!);
+            }
+          }
+        });
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Microphone permission denied')),
+          );
+        }
+      }
     }
   }
 
@@ -141,7 +212,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             IconButton(
               icon: Icon(_isListening ? Icons.mic : Icons.mic_none),
               color: _isListening ? Colors.red : Theme.of(context).colorScheme.secondary,
-              onPressed: _simulateVoiceInput,
+              onPressed: _toggleVoiceInput,
               tooltip: 'Voice Input',
             ),
             const SizedBox(width: 8.0),
