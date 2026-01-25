@@ -44,6 +44,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isComposing = false;
   bool _isListening = false;
+  bool _isTranscribing = false;
   final _supabase = Supabase.instance.client;
   final _recorder = AudioRecorder();
   String? _audioPath;
@@ -126,16 +127,13 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   }
 
   Future<void> _transcribeAudio(String path) async {
+    setState(() {
+      _isTranscribing = true;
+    });
+
     try {
       final file = File(path);
       if (!await file.exists()) return;
-      
-      // Show loading indicator or toast
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Transcribing audio...'), duration: Duration(seconds: 1)),
-        );
-      }
       
       final bytes = await file.readAsBytes();
       
@@ -156,9 +154,27 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
            _handleSubmitted(text);
         }
       } else {
+        // Handle specific error cases
+        String errorMessage = 'Transcription failed';
+        try {
+          final json = jsonDecode(respStr);
+          if (json['is_config_error'] == true) {
+            errorMessage = 'Configuration Error: ${json['error']}';
+            _showApiKeyDialog();
+          } else {
+            errorMessage = json['error'] ?? respStr;
+          }
+        } catch (_) {
+          errorMessage = respStr;
+        }
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Transcription failed: $respStr')),
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
           );
         }
       }
@@ -169,6 +185,11 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         );
       }
     } finally {
+      if (mounted) {
+        setState(() {
+          _isTranscribing = false;
+        });
+      }
       // Clean up temp file
       if (path.isNotEmpty) {
         try {
@@ -178,12 +199,34 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     }
   }
 
+  void _showApiKeyDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Setup Required'),
+        content: const Text(
+          'To use the voice feature, you need to set up the Groq API Key (Free).\n\n'
+          '1. Go to console.groq.com and get a free API Key.\n'
+          '2. Go to your Supabase Dashboard -> Edge Functions -> Secrets.\n'
+          '3. Add a new secret named "GROQ_API_KEY" with your key value.'
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _startRecording() async {
     try {
       if (await _recorder.hasPermission()) {
         final tempDir = await getTemporaryDirectory();
         final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
         
+        // Use WAV encoder for compatibility
         const config = RecordConfig(encoder: AudioEncoder.wav);
         await _recorder.start(config, path: path);
         
@@ -209,7 +252,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         }
       }
     } on MissingPluginException {
-      // Catch MissingPluginException specifically to guide the user
       if (mounted) {
         showDialog(
           context: context,
@@ -326,37 +368,56 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                         ),
                       ],
                     )
-                  : Row(
-                      children: [
-                        const SizedBox(width: 16.0),
-                        Expanded(
-                          child: TextField(
-                            controller: _textController,
-                            onChanged: (text) {
-                              setState(() {
-                                _isComposing = text.isNotEmpty;
-                              });
-                            },
-                            onSubmitted: _handleSubmitted,
-                            decoration: const InputDecoration(
-                              hintText: 'Tell or ask Memo something',
-                              border: InputBorder.none,
-                              isDense: true,
-                              contentPadding: EdgeInsets.symmetric(vertical: 10.0),
+                  : _isTranscribing 
+                    ? Row(
+                        children: [
+                          const SizedBox(width: 16),
+                          const SizedBox(
+                            width: 16, 
+                            height: 16, 
+                            child: CircularProgressIndicator(strokeWidth: 2)
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Transcribing...',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontStyle: FontStyle.italic,
                             ),
                           ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.arrow_upward_rounded),
-                          color: _isComposing 
-                              ? Theme.of(context).colorScheme.primary 
-                              : Theme.of(context).disabledColor,
-                          onPressed: _isComposing
-                              ? () => _handleSubmitted(_textController.text)
-                              : null,
-                        ),
-                      ],
-                    ),
+                        ],
+                      )
+                    : Row(
+                        children: [
+                          const SizedBox(width: 16.0),
+                          Expanded(
+                            child: TextField(
+                              controller: _textController,
+                              onChanged: (text) {
+                                setState(() {
+                                  _isComposing = text.isNotEmpty;
+                                });
+                              },
+                              onSubmitted: _handleSubmitted,
+                              decoration: const InputDecoration(
+                                hintText: 'Tell or ask Memo something',
+                                border: InputBorder.none,
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(vertical: 10.0),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.arrow_upward_rounded),
+                            color: _isComposing 
+                                ? Theme.of(context).colorScheme.primary 
+                                : Theme.of(context).disabledColor,
+                            onPressed: _isComposing
+                                ? () => _handleSubmitted(_textController.text)
+                                : null,
+                          ),
+                        ],
+                      ),
               ),
             ),
           ],
