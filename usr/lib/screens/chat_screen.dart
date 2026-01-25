@@ -40,6 +40,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isComposing = false;
+  bool _isAiThinking = false; // To show loading indicator for AI response
   
   // Speech to Text variables
   final SpeechToText _speechToText = SpeechToText();
@@ -62,7 +63,9 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         onStatus: _onSpeechStatus,
         onError: _onSpeechError,
       );
-      setState(() {});
+      if (mounted) {
+        setState(() {});
+      }
     } catch (e) {
       print('Speech initialization error: $e');
     }
@@ -70,18 +73,22 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
   void _onSpeechStatus(String status) {
     print('Speech status: $status');
-    setState(() {
-      _isListening = status == 'listening';
-    });
+    if (mounted) {
+      setState(() {
+        _isListening = status == 'listening';
+      });
+    }
   }
 
   void _onSpeechError(dynamic errorNotification) {
     print('Speech error: $errorNotification');
-    setState(() {
-      _isListening = false;
-    });
-    // Don't show snackbar for 'no match' as it can be spammy
-    if (errorNotification.errorMsg != 'error_no_match') {
+    if (mounted) {
+      setState(() {
+        _isListening = false;
+      });
+    }
+    // Don't show snackbar for 'no match' or 'notListening' as it can be spammy
+    if (errorNotification.errorMsg != 'error_no_match' && errorNotification.errorMsg != 'error_speech_timeout') {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Speech Error: ${errorNotification.errorMsg}')),
       );
@@ -111,10 +118,90 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         'user_id': userId,
       });
     } catch (e) {
+      print('Error saving message: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error saving message: $e')),
         );
+      }
+    }
+  }
+
+  Future<void> _getAiResponse(String userMessage) async {
+    setState(() {
+      _isAiThinking = true;
+    });
+
+    try {
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      // 1. Fetch chat history (only user messages as requested)
+      // We limit to last 20 messages to avoid hitting token limits too fast
+      final List<dynamic> historyData = await _supabase
+          .from('messages')
+          .select('content, is_user, created_at')
+          .eq('user_id', userId)
+          .eq('is_user', true) // Only fetch user messages as requested
+          .order('created_at', ascending: false)
+          .limit(20);
+
+      // Reverse to chronological order
+      final history = historyData.reversed.toList();
+
+      // Format messages for Grok API
+      final List<Map<String, String>> messages = history.map<Map<String, String>>((msg) {
+        return {
+          'role': 'user',
+          'content': msg['content'] as String,
+        };
+      }).toList();
+
+      // Add the current message if it's not already in the DB (it should be, but just in case of race conditions or if we want to be explicit)
+      // Since we save before calling this, it might be in historyData if the DB is fast enough. 
+      // To be safe and ensure the latest prompt is there, we can check or just rely on the fact that we just saved it.
+      // However, the query above might miss the *just* inserted message if replication is slow.
+      // Let's manually append the current message if it's not the last one in history.
+      
+      if (messages.isEmpty || messages.last['content'] != userMessage) {
+        messages.add({
+          'role': 'user',
+          'content': userMessage,
+        });
+      }
+
+      // 2. Call the Edge Function
+      final response = await _supabase.functions.invoke(
+        'chat-grok',
+        body: {'messages': messages},
+      );
+
+      if (response.status != 200) {
+        throw Exception('Failed to get response from AI: ${response.status}');
+      }
+
+      final data = response.data;
+      if (data != null && data['reply'] != null) {
+        final aiReply = data['reply'] as String;
+        await _saveMessage(aiReply, false);
+      } else if (data != null && data['error'] != null) {
+        throw Exception(data['error']);
+      } else {
+        throw Exception('Invalid response format from AI');
+      }
+
+    } catch (e) {
+      print('AI Error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error getting AI response: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAiThinking = false;
+        });
       }
     }
   }
@@ -131,23 +218,8 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     // 1. Save user message
     await _saveMessage(text, true);
 
-    // 2. Simulate Agent response
-    Future.delayed(const Duration(milliseconds: 600), () async {
-      String responseText;
-      String lowerText = text.toLowerCase();
-
-      if (lowerText.startsWith('search') || lowerText.startsWith('find') || lowerText.contains('搜索')) {
-        responseText = "Searching your memories for: \"${text.replaceFirst(RegExp(r'search|find|搜索', caseSensitive: false), '').trim()}\" ... \n(This is a demo search result)";
-      } else if (lowerText.endsWith('?')) {
-        responseText = "That's an interesting question. Based on what you've told me before, I think...";
-      } else {
-        responseText = "Got it. I've saved this to your memory.";
-      }
-
-      if (mounted) {
-        await _saveMessage(responseText, false);
-      }
-    });
+    // 2. Get AI Response (Grok)
+    await _getAiResponse(text);
   }
 
   /// Start listening for speech
@@ -164,7 +236,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
     await _speechToText.listen(
       onResult: _onSpeechResult,
-      localeId: 'en_US', // Default to English, can be made dynamic
+      localeId: 'en_US', // Default to English
       listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 3),
       partialResults: true,
@@ -194,8 +266,15 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       _isComposing = _lastWords.isNotEmpty;
     });
 
-    // If final result, we could auto-send, but let's let user confirm
-    // if (result.finalResult) { ... }
+    // Automatically send when speech is final
+    if (result.finalResult && _lastWords.isNotEmpty) {
+      // Add a small delay to ensure the user sees the final text before sending
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+           _handleSubmitted(_lastWords);
+        }
+      });
+    }
   }
 
   Widget _buildTextComposer() {
@@ -254,15 +333,28 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                         ),
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.arrow_upward_rounded),
-                      color: _isComposing 
-                          ? Theme.of(context).colorScheme.primary 
-                          : Theme.of(context).disabledColor,
-                      onPressed: _isComposing
-                          ? () => _handleSubmitted(_textController.text)
-                          : null,
-                    ),
+                    if (_isAiThinking)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      )
+                    else
+                      IconButton(
+                        icon: const Icon(Icons.arrow_upward_rounded),
+                        color: _isComposing 
+                            ? Theme.of(context).colorScheme.primary 
+                            : Theme.of(context).disabledColor,
+                        onPressed: _isComposing
+                            ? () => _handleSubmitted(_textController.text)
+                            : null,
+                      ),
                   ],
                 ),
               ),
