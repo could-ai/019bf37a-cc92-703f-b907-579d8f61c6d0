@@ -1,86 +1,81 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { corsHeaders } from "https://deno.land/x/supabase@1.0.0/cors.ts"
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-Deno.serve(async (req) => {
+serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    return new Response(null, { headers: corsHeaders })
   }
 
   try {
-    // Check if the request has a body
-    if (req.bodyUsed) {
-       // body already read?
-    }
-    
+    // Get the request body
     const { messages } = await req.json()
 
-    // Validate input
     if (!messages || !Array.isArray(messages)) {
-      return new Response(JSON.stringify({ error: 'Invalid messages format' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      return new Response(
+        JSON.stringify({ error: 'Messages array is required' }),
+        { 
+          status: 400, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
     }
-
-    const apiKey = Deno.env.get('GROK_API_KEY')
-    if (!apiKey) {
-      console.error('GROK_API_KEY is not set')
-      return new Response(JSON.stringify({ error: 'Server configuration error' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
-
-    console.log(`Sending ${messages.length} messages to Grok API`)
 
     // Call Grok API
     const response = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${Deno.env.get('GROK_API_KEY')}`,
       },
       body: JSON.stringify({
-        model: 'grok-beta',
+        model: 'grok-2-latest',
         messages: messages,
-        stream: false,
-        temperature: 0.7
+        max_tokens: 1000,
+        temperature: 0.7,
       }),
     })
 
-    const data = await response.json()
-
     if (!response.ok) {
-      console.error('Grok API Error:', data)
-      return new Response(JSON.stringify({ error: data.error?.message || 'Error from AI provider' }), {
-        status: response.status,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      const errorData = await response.text()
+      console.error('Grok API error:', response.status, errorData)
+      return new Response(
+        JSON.stringify({ error: `Grok API error: ${response.status}` }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
     }
 
-    if (!data.choices || data.choices.length === 0) {
-       return new Response(JSON.stringify({ error: 'No response from AI' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+    const data = await response.json()
+    const reply = data.choices?.[0]?.message?.content
+
+    if (!reply) {
+      return new Response(
+        JSON.stringify({ error: 'No response from Grok API' }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
     }
 
-    const reply = data.choices[0].message.content
-
-    return new Response(JSON.stringify({ reply }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    return new Response(
+      JSON.stringify({ reply }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      }
+    )
 
   } catch (error) {
-    console.error('Function Error:', error)
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    console.error('Function error:', error)
+    return new Response(
+      JSON.stringify({ error: 'Internal server error' }),
+      { 
+        status: 500, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      }
+    )
   }
 })
