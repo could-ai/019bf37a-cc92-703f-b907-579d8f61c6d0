@@ -2,15 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ChatMessage {
+  final String id;
   final String text;
   final bool isUser;
   final DateTime timestamp;
 
   ChatMessage({
+    required this.id,
     required this.text,
     required this.isUser,
     required this.timestamp,
   });
+
+  factory ChatMessage.fromMap(Map<String, dynamic> map) {
+    return ChatMessage(
+      id: map['id'] ?? '',
+      text: map['content'] ?? '',
+      isUser: map['is_user'] ?? true,
+      timestamp: DateTime.parse(map['created_at']).toLocal(),
+    );
+  }
 }
 
 class MemoChatScreen extends StatefulWidget {
@@ -21,26 +32,20 @@ class MemoChatScreen extends StatefulWidget {
 }
 
 class _MemoChatScreenState extends State<MemoChatScreen> {
-  final List<ChatMessage> _messages = [];
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isComposing = false;
   bool _isListening = false; // 模拟语音状态
+  final _supabase = Supabase.instance.client;
 
   @override
   void initState() {
     super.initState();
-    // 添加一条初始欢迎消息
-    _messages.add(ChatMessage(
-      text: "Hi, I'm Memo. I can help you remember things and answer your questions.",
-      isUser: false,
-      timestamp: DateTime.now(),
-    ));
   }
 
   Future<void> _signOut() async {
     try {
-      await Supabase.instance.client.auth.signOut();
+      await _supabase.auth.signOut();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -50,7 +55,26 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     }
   }
 
-  void _handleSubmitted(String text) {
+  Future<void> _saveMessage(String text, bool isUser) async {
+    try {
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      await _supabase.from('messages').insert({
+        'content': text,
+        'is_user': isUser,
+        'user_id': userId,
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving message: $e')),
+        );
+      }
+    }
+  }
+
+  void _handleSubmitted(String text) async {
     _textController.clear();
     setState(() {
       _isComposing = false;
@@ -58,19 +82,12 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
     if (text.trim().isEmpty) return;
 
-    // 1. 添加用户消息
-    ChatMessage userMessage = ChatMessage(
-      text: text,
-      isUser: true,
-      timestamp: DateTime.now(),
-    );
-
-    setState(() {
-      _messages.insert(0, userMessage);
-    });
+    // 1. 保存用户消息到数据库
+    await _saveMessage(text, true);
 
     // 2. 模拟 Memo 的回复逻辑
-    Future.delayed(const Duration(milliseconds: 600), () {
+    // 在实际应用中，这里可能会调用 Edge Function 或其他 AI 服务
+    Future.delayed(const Duration(milliseconds: 600), () async {
       String responseText;
       String lowerText = text.toLowerCase();
 
@@ -83,13 +100,8 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       }
 
       if (mounted) {
-        setState(() {
-          _messages.insert(0, ChatMessage(
-            text: responseText,
-            isUser: false,
-            timestamp: DateTime.now(),
-          ));
-        });
+        // 保存 Agent 回复到数据库
+        await _saveMessage(responseText, false);
       }
     });
   }
@@ -199,14 +211,58 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16.0),
-              reverse: true, // 消息从底部开始
-              itemCount: _messages.length,
-              itemBuilder: (_, int index) {
-                final message = _messages[index];
-                return _ChatBubble(message: message);
+            child: StreamBuilder<List<Map<String, dynamic>>>(
+              stream: _supabase
+                  .from('messages')
+                  .stream(primaryKey: ['id'])
+                  .order('created_at', ascending: false),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                }
+
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                final data = snapshot.data!;
+                
+                // 如果没有消息，显示欢迎语（本地显示，不存库，或者你可以选择存库）
+                if (data.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.psychology, size: 64, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
+                          const SizedBox(height: 16),
+                          Text(
+                            "Hi, I'm Memo.\nI can help you remember things and answer your questions.",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.secondary,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                final messages = data.map((map) => ChatMessage.fromMap(map)).toList();
+
+                return ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(16.0),
+                  reverse: true, // 消息从底部开始
+                  itemCount: messages.length,
+                  itemBuilder: (_, int index) {
+                    final message = messages[index];
+                    return _ChatBubble(message: message);
+                  },
+                );
               },
             ),
           ),
