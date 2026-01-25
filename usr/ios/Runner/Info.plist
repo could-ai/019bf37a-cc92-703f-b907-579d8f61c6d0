@@ -46,6 +46,8 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>We need access to your microphone to record voice messages for the AI.</string>
+    <string>We need access to your microphone for voice chat.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>We need access to speech recognition to convert your voice to text.</string>
 </dict>
 </plist>

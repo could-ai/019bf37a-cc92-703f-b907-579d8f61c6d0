@@ -9,9 +9,8 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.9.1
-  record: ^5.0.0
+  speech_to_text: ^7.3.0
   http: ^1.0.0
-  path_provider: ^2.1.0
 
 dev_dependencies:
   flutter_test:
