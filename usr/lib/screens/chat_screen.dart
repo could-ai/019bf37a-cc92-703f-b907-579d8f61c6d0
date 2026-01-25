@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -43,8 +44,10 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   bool _isComposing = false;
   bool _isListening = false;
   final _supabase = Supabase.instance.client;
-  final _recorder = AudioRecorder(); // Changed from Record() to AudioRecorder() for v5
+  final _recorder = AudioRecorder();
   String? _audioPath;
+  Timer? _recordingTimer;
+  int _recordDurationSeconds = 0;
 
   @override
   void initState() {
@@ -53,6 +56,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
   @override
   void dispose() {
+    _recordingTimer?.cancel();
     _recorder.dispose();
     super.dispose();
   }
@@ -125,6 +129,13 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       final file = File(path);
       if (!await file.exists()) return;
       
+      // Show loading indicator or toast
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Transcribing audio...'), duration: Duration(seconds: 1)),
+        );
+      }
+      
       final bytes = await file.readAsBytes();
       
       // Use SupabaseConfig for URL and Key
@@ -166,42 +177,27 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     }
   }
 
-  void _toggleVoiceInput() async {
-    if (_isListening) {
-      // Stop recording
-      final path = await _recorder.stop();
-      setState(() {
-        _isListening = false;
-        _audioPath = path;
-      });
-      if (_audioPath != null) {
-        await _transcribeAudio(_audioPath!);
-      }
-    } else {
-      // Start recording
+  void _startRecording() async {
+    try {
       if (await _recorder.hasPermission()) {
         final tempDir = await getTemporaryDirectory();
         final path = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
         
-        // Start recording with config
         const config = RecordConfig(encoder: AudioEncoder.wav);
         await _recorder.start(config, path: path);
         
         setState(() {
           _isListening = true;
+          _recordDurationSeconds = 0;
         });
-        
-        // Auto-stop after 30 seconds
-        Future.delayed(const Duration(seconds: 30), () async {
-          if (_isListening && mounted) {
-            final path = await _recorder.stop();
-            setState(() {
-              _isListening = false;
-              _audioPath = path;
-            });
-            if (_audioPath != null) {
-              await _transcribeAudio(_audioPath!);
-            }
+
+        _recordingTimer?.cancel();
+        _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          setState(() {
+            _recordDurationSeconds++;
+          });
+          if (_recordDurationSeconds >= 30) {
+            _stopRecording();
           }
         });
       } else {
@@ -211,7 +207,46 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
           );
         }
       }
+    } catch (e) {
+      print('Error starting record: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error starting record: $e')),
+        );
+      }
     }
+  }
+
+  void _stopRecording() async {
+    _recordingTimer?.cancel();
+    if (!_isListening) return;
+
+    try {
+      final path = await _recorder.stop();
+      setState(() {
+        _isListening = false;
+        _audioPath = path;
+      });
+      if (_audioPath != null) {
+        await _transcribeAudio(_audioPath!);
+      }
+    } catch (e) {
+      print('Error stopping record: $e');
+    }
+  }
+
+  void _cancelRecording() async {
+    _recordingTimer?.cancel();
+    if (!_isListening) return;
+    
+    try {
+      await _recorder.stop();
+    } catch (_) {}
+
+    setState(() {
+      _isListening = false;
+      _audioPath = null;
+    });
   }
 
   Widget _buildTextComposer() {
@@ -224,11 +259,22 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       child: SafeArea(
         child: Row(
           children: [
-            IconButton(
-              icon: Icon(_isListening ? Icons.mic : Icons.mic_none),
-              color: _isListening ? Colors.red : Theme.of(context).colorScheme.secondary,
-              onPressed: _toggleVoiceInput,
-              tooltip: 'Voice Input',
+            GestureDetector(
+              onLongPressStart: (_) => _startRecording(),
+              onLongPressEnd: (_) => _stopRecording(),
+              child: IconButton(
+                icon: Icon(_isListening ? Icons.stop_circle_outlined : Icons.mic_none),
+                color: _isListening ? Colors.red : Theme.of(context).colorScheme.secondary,
+                iconSize: _isListening ? 32 : 24,
+                onPressed: () {
+                  if (_isListening) {
+                    _stopRecording();
+                  } else {
+                    _startRecording();
+                  }
+                },
+                tooltip: _isListening ? 'Stop Recording' : 'Voice Input (Hold or Tap)',
+              ),
             ),
             const SizedBox(width: 8.0),
             Expanded(
@@ -238,37 +284,58 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                   borderRadius: BorderRadius.circular(24.0),
                   border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.2)),
                 ),
-                child: Row(
-                  children: [
-                    const SizedBox(width: 16.0),
-                    Expanded(
-                      child: TextField(
-                        controller: _textController,
-                        onChanged: (text) {
-                          setState(() {
-                            _isComposing = text.isNotEmpty;
-                          });
-                        },
-                        onSubmitted: _handleSubmitted,
-                        decoration: const InputDecoration(
-                          hintText: 'Tell or ask Memo something',
-                          border: InputBorder.none,
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(vertical: 10.0),
+                child: _isListening 
+                  ? Row(
+                      children: [
+                        const SizedBox(width: 16),
+                        const Icon(Icons.fiber_manual_record, color: Colors.red, size: 16),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Recording... 00:${_recordDurationSeconds.toString().padLeft(2, '0')} / 00:30',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: _cancelRecording,
+                          tooltip: 'Cancel',
+                        ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        const SizedBox(width: 16.0),
+                        Expanded(
+                          child: TextField(
+                            controller: _textController,
+                            onChanged: (text) {
+                              setState(() {
+                                _isComposing = text.isNotEmpty;
+                              });
+                            },
+                            onSubmitted: _handleSubmitted,
+                            decoration: const InputDecoration(
+                              hintText: 'Tell or ask Memo something',
+                              border: InputBorder.none,
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(vertical: 10.0),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.arrow_upward_rounded),
+                          color: _isComposing 
+                              ? Theme.of(context).colorScheme.primary 
+                              : Theme.of(context).disabledColor,
+                          onPressed: _isComposing
+                              ? () => _handleSubmitted(_textController.text)
+                              : null,
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.arrow_upward_rounded),
-                      color: _isComposing 
-                          ? Theme.of(context).colorScheme.primary 
-                          : Theme.of(context).disabledColor,
-                      onPressed: _isComposing
-                          ? () => _handleSubmitted(_textController.text)
-                          : null,
-                    ),
-                  ],
-                ),
               ),
             ),
           ],
@@ -313,7 +380,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
                 final data = snapshot.data!;
                 
-                // 如果没有消息，显示欢迎语
                 if (data.isEmpty) {
                   return Center(
                     child: Padding(
@@ -342,7 +408,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                 return ListView.builder(
                   controller: _scrollController,
                   padding: const EdgeInsets.all(16.0),
-                  reverse: true, // 消息从底部开始
+                  reverse: true,
                   itemCount: messages.length,
                   itemBuilder: (_, int index) {
                     final message = messages[index];
@@ -404,7 +470,7 @@ class _ChatBubble extends StatelessWidget {
               ),
             ),
           ),
-          if (isUser) const SizedBox(width: 40), // 简单的缩进
+          if (isUser) const SizedBox(width: 40),
           if (!isUser) const SizedBox(width: 40),
         ],
       ),
