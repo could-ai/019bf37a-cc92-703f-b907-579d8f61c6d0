@@ -28,5 +28,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>We need access to your microphone to record voice messages for the AI.</string>
 </dict>
 </plist>
