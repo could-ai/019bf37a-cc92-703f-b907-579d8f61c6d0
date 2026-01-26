@@ -1,131 +1,88 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient } from "jsr:@supabase/supabase-js@2"
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*", // 生产建议换成你的域名
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 }
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? ""
+const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? ""
+const grokKey = Deno.env.get("GROK_API_KEY") ?? ""
 
-if (!supabaseUrl || !serviceRoleKey) {
-  throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables')
-}
+if (!supabaseUrl || !anonKey) throw new Error("Missing SUPABASE_URL or SUPABASE_ANON_KEY")
+if (!grokKey) throw new Error("Missing GROK_API_KEY")
 
-const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
+const json = (obj: unknown, status = 200) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  })
 
-const unauthorized = (message = 'Unauthorized') =>
-  new Response(
-    JSON.stringify({ error: message }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 },
-  )
+async function getAuthedUser(req: Request) {
+  const authHeader = req.headers.get("Authorization") || req.headers.get("authorization")
+  if (!authHeader?.toLowerCase().startsWith("bearer ")) return null
 
-async function authenticateRequest(req: Request) {
-  const authHeader = req.headers.get('authorization')
-  if (!authHeader?.toLowerCase().startsWith('bearer ')) {
-    return unauthorized('Missing Authorization header')
-  }
+  const supabase = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+  })
 
-  const token = authHeader.replace(/bearer\s+/i, '').trim()
-  if (!token) {
-    return unauthorized('Missing JWT')
-  }
-
-  const { data, error } = await supabaseAdmin.auth.getUser(token)
-  if (error || !data?.user) {
-    console.error('JWT verification failed', error)
-    return unauthorized('Invalid JWT')
-  }
-
-  return { token, user: data.user }
+  const { data, error } = await supabase.auth.getUser()
+  if (error) return null
+  return data.user ?? null
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
   try {
-    const authResult = await authenticateRequest(req)
-    if (authResult instanceof Response) {
-      return authResult
+    const user = await getAuthedUser(req)
+    if (!user || user.role !== "authenticated") return json({ error: "Unauthorized" }, 401)
+
+    const body = await req.json().catch(() => null)
+    const messages = body?.messages
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return json({ error: "messages must be a non-empty array" }, 400)
+    }
+    if (messages.length > 50) {
+      return json({ error: "too many messages" }, 400)
     }
 
-    // 1. Get the request body
-    const { messages } = await req.json()
-    
-    if (!messages) {
-      return new Response(
-        JSON.stringify({ error: 'Messages are required' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
-      )
+    // 可选：限制每条 content 长度，避免巨大 payload
+    for (const m of messages) {
+      if (!m || typeof m !== "object") return json({ error: "invalid message" }, 400)
+      if (typeof m.role !== "string" || typeof m.content !== "string") return json({ error: "invalid message shape" }, 400)
+      if (m.content.length > 8000) return json({ error: "message too long" }, 400)
     }
 
-    // 2. Get API Key
-    const apiKey = Deno.env.get('GROK_API_KEY')
-    if (!apiKey) {
-      console.error('GROK_API_KEY is missing')
-      return new Response(
-        JSON.stringify({ error: 'Server configuration error: Missing API Key' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-      )
-    }
-
-    console.log(`User ${authResult.user.id} sending ${messages.length} messages to Grok...`)
-
-    // 3. Call Grok API
-    const response = await fetch('https://api.x.ai/v1/chat/completions', {
-      method: 'POST',
+    const resp = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${grokKey}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: 'grok-2-latest', // Or 'grok-beta'
-        messages: messages,
+        model: "grok-2-latest",
+        messages,
         stream: false,
-        temperature: 0.7
+        temperature: 0.7,
       }),
     })
 
-    // 4. Handle Grok API Response
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`Grok API Error (${response.status}):`, errorText)
-      
-      // CRITICAL: Return 500 instead of 401 for upstream errors to avoid logging out the user
-      return new Response(
-        JSON.stringify({ 
-          error: `AI Provider Error: ${response.status}`,
-          details: errorText 
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-      )
+    if (!resp.ok) {
+      const text = await resp.text()
+      return json({ error: `AI Provider Error: ${resp.status}`, details: text }, 500)
     }
 
-    const data = await response.json()
-    const reply = data.choices[0]?.message?.content
+    const data = await resp.json()
+    const reply = data?.choices?.[0]?.message?.content
+    if (!reply) return json({ error: "Empty response from AI" }, 500)
 
-    if (!reply) {
-      return new Response(
-        JSON.stringify({ error: 'Empty response from AI' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-      )
-    }
-
-    // 5. Success
-    return new Response(
-      JSON.stringify({ reply }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
-    )
-
-  } catch (error) {
-    console.error('Edge Function Error:', error)
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-    )
+    return json({ reply })
+  } catch (e) {
+    return json({ error: String(e?.message ?? e) }, 500)
   }
 })
