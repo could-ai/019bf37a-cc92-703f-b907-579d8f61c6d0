@@ -102,7 +102,7 @@ JSON FORMAT:
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-4-1-fast-non-reasoning", // Using a reliable model ID
+        model: "grok-4-1, // Using a reliable model ID
         messages,
         stream: false,
         temperature: 0.7,
