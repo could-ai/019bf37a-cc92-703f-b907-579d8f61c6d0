@@ -1,168 +1,159 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from 'jsr:@supabase/supabase-js@2'
-import * as jose from "jsr:@panva/jose@6"
+import { createClient } from "jsr:@supabase/supabase-js@2"
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 }
 
-// JWT Verification Setup
-const jwks = jose.createRemoteJWKSet(
-  new URL(`${Deno.env.get("SUPABASE_URL")}/auth/v1/.well-known/jwks.json`)
-)
-const issuer = Deno.env.get("SB_JWT_ISSUER") ?? `${Deno.env.get("SUPABASE_URL")}/auth/v1`
+const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? ""
+const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? ""
+const grokKey = Deno.env.get("GROK_API_KEY") ?? ""
 
-async function requireUser(req: Request) {
-  const authHeader = req.headers.get("Authorization")
-  if (!authHeader) throw new Error("Missing Authorization header")
-  
-  const token = authHeader.split(" ")[1]
-  if (!token) throw new Error("Missing Bearer token")
+if (!supabaseUrl || !anonKey) throw new Error("Missing SUPABASE_URL or SUPABASE_ANON_KEY")
+if (!grokKey) throw new Error("Missing GROK_API_KEY")
 
-  try {
-    const { payload } = await jose.jwtVerify(token, jwks, { issuer })
-    return payload // contains sub (user_id), role, etc.
-  } catch (err) {
-    console.error("JWT Verification failed:", err)
-    throw new Error("Invalid JWT")
-  }
-}
+const json = (obj: unknown, status = 200) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  })
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
   try {
-    // 1. Verify User
-    const user = await requireUser(req)
-    const userId = user.sub
+    // 1. Initialize Supabase Client with User's Auth Header
+    // This uses the standard Supabase Auth mechanism (getUser) instead of manual JWT verification
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const supabase = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
 
-    // 2. Parse Input
-    const { content } = await req.json()
-    if (!content) {
-      throw new Error("Missing 'content' in request body")
+    // 2. Verify User
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      console.error("Auth Error:", authError);
+      return json({ error: "Unauthorized" }, 401);
     }
 
-    // 3. Setup Supabase Admin Client (to access DB)
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    // 3. Parse Request Body
+    const body = await req.json().catch(() => ({}));
+    const userContent = body.content; 
+
+    if (!userContent || typeof userContent !== 'string') {
+      return json({ error: "Missing or invalid 'content' field" }, 400);
+    }
 
     // 4. Fetch User's Notes (Memory)
-    const { data: notesData, error: notesError } = await supabase
+    // We fetch ALL notes as requested to provide full context
+    const { data: notes, error: notesError } = await supabase
       .from('notes')
       .select('content')
-      .eq('user_id', userId)
-    
-    if (notesError) throw new Error(`Failed to fetch notes: ${notesError.message}`)
-    
-    const notesList = notesData?.map(n => n.content) || []
+      .order('created_at', { ascending: true });
+
+    if (notesError) {
+      console.error("Notes Fetch Error:", notesError);
+      return json({ error: "Failed to fetch memory" }, 500);
+    }
+
+    const notesList = notes?.map(n => n.content) || [];
     const notesContext = notesList.length > 0 
-      ? notesList.map((n, i) => `- ${n}`).join('\n') 
-      : "No notes yet."
+      ? notesList.join("\n- ") 
+      : "No previous notes.";
 
-    // 5. Call Grok API
-    const grokApiKey = Deno.env.get('GROK_API_KEY')
-    if (!grokApiKey) throw new Error("GROK_API_KEY is not set")
+    // 5. Construct Prompt for Grok
+    const systemPrompt = `You are Memo, an intelligent personal assistant.
+    
+YOUR GOAL:
+1. Answer the user's message helpfully.
+2. Identify if the user provided any NEW personal information, facts, or reminders that should be saved to memory.
 
-    const systemPrompt = `You are Memo, a personal memory assistant.
-You have access to the user's personal notes.
-Your goal is to answer the user's request based on these notes, AND to extract any new personal information to save.
+CURRENT MEMORY (Notes):
+- ${notesContext}
 
-Current Notes:
-${notesContext}
-
-Instructions:
-1. Analyze the User Input.
-2. If the user provides NEW information (facts, preferences, events, plans) that is not already in the notes, extract it.
-3. If the user asks a question, answer it using the Current Notes.
-4. You MUST return a JSON object with this exact structure:
+OUTPUT FORMAT:
+You must respond in strict JSON format:
 {
-  "reply": "Your conversational response to the user",
-  "new_notes": ["extracted note 1", "extracted note 2"]
+  "reply": "Your response to the user here.",
+  "new_notes": ["Note 1", "Note 2"] 
 }
-If there are no new notes to save, "new_notes" should be an empty list [].
-Do not output markdown code blocks. Output raw JSON only.`
+If there are no new notes to save, "new_notes" should be an empty array [].
+Do not include markdown formatting (like \`\`\`json). Just the raw JSON string.`;
 
-    const response = await fetch('https://api.x.ai/v1/chat/completions', {
-      method: 'POST',
+    const messages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userContent }
+    ];
+
+    // 6. Call Grok API
+    // Using grok-beta for better JSON support, or falling back to the fast model if needed.
+    // Given the requirement for structured output, a smarter model is preferred.
+    const resp = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${grokApiKey}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${grokKey}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: 'grok-beta', // or grok-2-latest
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: content }
-        ],
-        temperature: 0.3, // Lower temperature for more consistent JSON
-        stream: false
+        model: "grok-beta", 
+        messages,
+        stream: false,
+        temperature: 0.3,
+        response_format: { type: "json_object" }
       }),
-    })
+    });
 
-    if (!response.ok) {
-      const errText = await response.text()
-      throw new Error(`Grok API Error: ${response.status} ${errText}`)
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error("Grok API Error:", text);
+      return json({ error: `AI Provider Error: ${resp.status}` }, 500);
     }
 
-    const aiData = await response.json()
-    const aiContent = aiData.choices[0]?.message?.content
+    const data = await resp.json();
+    const rawContent = data?.choices?.[0]?.message?.content;
 
-    if (!aiContent) throw new Error("Empty response from AI")
+    if (!rawContent) return json({ error: "Empty response from AI" }, 500);
 
-    // 6. Parse AI Response (JSON)
-    let parsedResponse
+    // 7. Parse AI Response
+    let parsedResponse;
     try {
-      // Clean up potential markdown code blocks if the AI adds them
-      const cleanJson = aiContent.replace(/```json\n?|\n?```/g, '').trim()
-      parsedResponse = JSON.parse(cleanJson)
+      parsedResponse = JSON.parse(rawContent);
     } catch (e) {
-      console.error("Failed to parse JSON from AI:", aiContent)
-      // Fallback if JSON parsing fails
+      console.error("JSON Parse Error:", e, rawContent);
+      // Fallback if AI didn't return JSON
       parsedResponse = { 
-        reply: aiContent, 
+        reply: rawContent, 
         new_notes: [] 
-      }
+      };
     }
 
-    // 7. Save New Notes
-    if (parsedResponse.new_notes && Array.isArray(parsedResponse.new_notes) && parsedResponse.new_notes.length > 0) {
-      const notesToInsert = parsedResponse.new_notes.map((note: string) => ({
-        user_id: userId,
+    // 8. Save New Notes
+    const newNotes = parsedResponse.new_notes;
+    if (Array.isArray(newNotes) && newNotes.length > 0) {
+      const notesToInsert = newNotes.map(note => ({
+        user_id: user.id,
         content: note
-      }))
-      
+      }));
+
       const { error: insertError } = await supabase
         .from('notes')
-        .insert(notesToInsert)
+        .insert(notesToInsert);
       
       if (insertError) {
-        console.error("Failed to save notes:", insertError)
-        // We don't fail the request, just log it
+        console.error("Notes Insert Error:", insertError);
       }
     }
 
-    // 8. Return Response
-    return new Response(JSON.stringify({ 
+    return json({ 
       reply: parsedResponse.reply,
-      saved_notes: parsedResponse.new_notes 
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+      saved_notes: newNotes 
+    });
 
-  } catch (error: any) {
-    console.error("Edge Function Error:", error)
-    
-    // Return 500 for internal errors, but 401 only for JWT issues
-    const status = error.message === "Invalid JWT" || error.message === "Missing Authorization header" ? 401 : 500
-    
-    return new Response(JSON.stringify({ error: error.message }), {
-      status,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+  } catch (e) {
+    console.error("Server Error:", e);
+    return json({ error: String(e?.message ?? e) }, 500);
   }
-})
+});
