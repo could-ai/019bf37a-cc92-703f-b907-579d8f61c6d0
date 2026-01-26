@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-2-latest",
+        model: "grok-4",
         messages,
         stream: false,
         temperature: 0.7,
