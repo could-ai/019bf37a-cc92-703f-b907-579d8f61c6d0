@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "jsr:@supabase/supabase-js@2"
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*", // 生产建议换成你的域名
+  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 }
@@ -30,7 +30,7 @@ async function getAuthedUser(req: Request) {
 
   const { data, error } = await supabase.auth.getUser()
   if (error) return null
-  return data.user ?? null
+  return { user: data.user, supabase } // Return client too for DB ops
 }
 
 Deno.serve(async (req) => {
@@ -38,26 +38,63 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
   try {
-    const user = await getAuthedUser(req)
-    if (!user || user.role !== "authenticated") return json({ error: "Unauthorized" }, 401)
+    // 1. Auth Check using User's pattern
+    const authResult = await getAuthedUser(req)
+    if (!authResult || !authResult.user || authResult.user.role !== "authenticated") {
+      return json({ error: "Unauthorized" }, 401)
+    }
+    const { user, supabase } = authResult
 
+    // 2. Parse Input
     const body = await req.json().catch(() => null)
-    const messages = body?.messages
-
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return json({ error: "messages must be a non-empty array" }, 400)
-    }
-    if (messages.length > 50) {
-      return json({ error: "too many messages" }, 400)
-    }
-
-    // 可选：限制每条 content 长度，避免巨大 payload
-    for (const m of messages) {
-      if (!m || typeof m !== "object") return json({ error: "invalid message" }, 400)
-      if (typeof m.role !== "string" || typeof m.content !== "string") return json({ error: "invalid message shape" }, 400)
-      if (m.content.length > 8000) return json({ error: "message too long" }, 400)
+    // Support both 'content' (Flutter app) and 'messages' (User snippet style)
+    let userMessage = ""
+    if (body.content) {
+      userMessage = body.content
+    } else if (body.messages && Array.isArray(body.messages)) {
+      // Extract last user message if sending full history
+      const lastMsg = body.messages[body.messages.length - 1]
+      if (lastMsg.role === 'user') userMessage = lastMsg.content
     }
 
+    if (!userMessage || typeof userMessage !== "string") {
+      return json({ error: "content must be a non-empty string" }, 400)
+    }
+
+    // 3. Fetch Notes (Memory)
+    const { data: notesData, error: notesError } = await supabase
+      .from('notes')
+      .select('content')
+      .order('created_at', { ascending: true })
+    
+    // Format notes for context
+    const notesContext = notesData?.map((n: any) => `- ${n.content}`).join('\n') || "No notes yet."
+
+    // 4. Construct Prompt for Grok
+    const systemPrompt = `You are Memo, a personal memory assistant.
+    
+Your goal is to chat with the user AND extract important personal information to save to their notes.
+    
+CURRENT NOTES (Memory):
+${notesContext}
+
+INSTRUCTIONS:
+1. Answer the user's question or chat naturally based on the Current Notes.
+2. If the user provides NEW personal information (e.g., "My name is Alice", "I like sushi", "I have a meeting on Friday"), extract it.
+3. You MUST return a valid JSON object. Do not return markdown code blocks.
+    
+JSON FORMAT:
+{
+  "reply": "Your response to the user...",
+  "new_notes": ["Note 1", "Note 2"] // Array of strings. Empty if no new info.
+}`
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage }
+    ]
+
+    // 5. Call Grok
     const resp = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -65,7 +102,7 @@ Deno.serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-4-1-fast-non-reasoning",
+        model: "grok-beta", // Using a reliable model ID
         messages,
         stream: false,
         temperature: 0.7,
@@ -78,11 +115,44 @@ Deno.serve(async (req) => {
     }
 
     const data = await resp.json()
-    const reply = data?.choices?.[0]?.message?.content
-    if (!reply) return json({ error: "Empty response from AI" }, 500)
+    const rawContent = data?.choices?.[0]?.message?.content
+    if (!rawContent) return json({ error: "Empty response from AI" }, 500)
 
-    return json({ reply })
-  } catch (e) {
+    // 6. Parse JSON Response
+    let parsed;
+    try {
+      // Clean up markdown code blocks if present
+      const cleanContent = rawContent.replace(/```json\n?|\n?```/g, "").trim();
+      parsed = JSON.parse(cleanContent);
+    } catch (e) {
+      console.error("Failed to parse JSON:", rawContent)
+      // Fallback: treat whole response as reply
+      parsed = { reply: rawContent, new_notes: [] }
+    }
+
+    const reply = parsed.reply || rawContent
+    const newNotes = Array.isArray(parsed.new_notes) ? parsed.new_notes : []
+
+    // 7. Save New Notes
+    let savedNotes = []
+    if (newNotes.length > 0) {
+      const notesToInsert = newNotes.map((note: string) => ({
+        user_id: user.id,
+        content: note
+      }))
+      
+      const { data: insertedNotes, error: insertError } = await supabase
+        .from('notes')
+        .insert(notesToInsert)
+        .select()
+      
+      if (!insertError && insertedNotes) {
+        savedNotes = insertedNotes
+      }
+    }
+
+    return json({ reply, saved_notes: savedNotes })
+
+  } catch (e: any) {
     return json({ error: String(e?.message ?? e) }, 500)
   }
-})
