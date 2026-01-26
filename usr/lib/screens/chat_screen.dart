@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:speech_to_text/speech_recognition_result.dart';
+import 'dart:convert'; // For jsonDecode
 
 class MemoChatScreen extends StatefulWidget {
   const MemoChatScreen({super.key});
@@ -139,45 +140,30 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         throw Exception('User not logged in');
       }
 
-      // 1. Fetch chat history (only user messages as requested)
-      final List<dynamic> historyData = await _supabase
-          .from('messages')
-          .select('content, is_user, created_at')
-          .eq('user_id', userId)
-          .eq('is_user', true) 
-          .order('created_at', ascending: false)
-          .limit(20);
-
-      final history = historyData.reversed.toList();
-
-      final List<Map<String, String>> messages = history.map<Map<String, String>>((msg) {
-        return {
-          'role': 'user',
-          'content': msg['content'] as String,
-        };
-      }).toList();
-
-      // Ensure current message is included if not already
-      if (messages.isEmpty || messages.last['content'] != userMessage) {
-        messages.add({
-          'role': 'user',
-          'content': userMessage,
-        });
-      }
-
-      print('Sending to AI: ${messages.length} messages');
-
-      // 2. Call the Edge Function
+      // Updated: Send only the current message content, not the full history.
+      // The backend now handles fetching 'notes' context.
       final response = await _supabase.functions.invoke(
         'chat-grok',
-        body: {'messages': messages},
+        body: {'content': userMessage},
       );
 
       if (response.status != 200) {
+        // Handle non-200 responses
+        String errorMessage = 'Function error: ${response.status}';
+        try {
+          // Try to parse error details if available
+          if (response.data is Map && response.data['error'] != null) {
+            errorMessage = response.data['error'];
+          } else if (response.data is String) {
+             // Sometimes data is a string (e.g. plain text error)
+             errorMessage = response.data;
+          }
+        } catch (_) {}
+
         throw FunctionException(
           status: response.status, 
           details: response.data, 
-          reasonPhrase: 'Function error'
+          reasonPhrase: errorMessage
         );
       }
 
@@ -185,6 +171,20 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       if (data != null && data['reply'] != null) {
         final aiReply = data['reply'] as String;
         await _saveMessage(aiReply, false);
+        
+        // Optional: Show a small indicator if notes were saved
+        if (data['saved_notes'] != null && (data['saved_notes'] as List).isNotEmpty) {
+           if (mounted) {
+             ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(
+                 content: Text('Memo updated new information!'),
+                 duration: Duration(seconds: 2),
+                 backgroundColor: Colors.green,
+               ),
+             );
+           }
+        }
+
       } else if (data != null && data['error'] != null) {
         throw Exception(data['error']);
       } else {
@@ -194,24 +194,30 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     } on FunctionException catch (e) {
       print('Function Error: ${e.status} ${e.details} ${e.reasonPhrase}');
       if (mounted) {
-        // CRITICAL FIX: Do NOT auto-logout on 401. 
-        // Just show the error so the user can try again or debug.
-        // Auto-logout was causing a loop where any network/API error forced the user out.
-        
-        String errorMessage = 'AI Error (${e.status})';
-        if (e.details != null && e.details is Map && e.details['error'] != null) {
-          errorMessage = e.details['error'];
-        } else if (e.reasonPhrase != null) {
-          errorMessage += ': ${e.reasonPhrase}';
+        // Handle 401 specifically
+        if (e.status == 401) {
+           ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Session expired. Please login again.'), 
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'Logout', 
+                onPressed: _signOut,
+                textColor: Colors.white,
+              ),
+            ),
+          );
+        } else {
+          // Show general error
+          String msg = e.reasonPhrase ?? 'Unknown error';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('AI Error: $msg'), 
+              backgroundColor: Colors.red
+            ),
+          );
         }
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage), 
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
-        );
       }
     } catch (e) {
       print('AI Error: $e');
