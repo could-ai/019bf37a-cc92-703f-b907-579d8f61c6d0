@@ -30,7 +30,7 @@ async function getAuthedUser(req: Request) {
 
   const { data, error } = await supabase.auth.getUser()
   if (error) return null
-  return { user: data.user, supabase }
+  return { user: data.user, supabase } // Return client too for DB ops
 }
 
 Deno.serve(async (req) => {
@@ -38,7 +38,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
   try {
-    // 1. Auth Check
+    // 1. Auth Check using User's pattern
     const authResult = await getAuthedUser(req)
     if (!authResult || !authResult.user || authResult.user.role !== "authenticated") {
       return json({ error: "Unauthorized" }, 401)
@@ -47,12 +47,12 @@ Deno.serve(async (req) => {
 
     // 2. Parse Input
     const body = await req.json().catch(() => null)
+    // Support both 'content' (Flutter app) and 'messages' (User snippet style)
     let userMessage = ""
-    
-    // Fix: Handle both 'content' (Flutter) and 'messages' (Legacy) to prevent 400 error
     if (body.content) {
       userMessage = body.content
     } else if (body.messages && Array.isArray(body.messages)) {
+      // Extract last user message if sending full history
       const lastMsg = body.messages[body.messages.length - 1]
       if (lastMsg.role === 'user') userMessage = lastMsg.content
     }
@@ -62,47 +62,32 @@ Deno.serve(async (req) => {
     }
 
     // 3. Fetch Notes (Memory)
-    const { data: notesData } = await supabase
+    const { data: notesData, error: notesError } = await supabase
       .from('notes')
       .select('content')
       .order('created_at', { ascending: true })
     
-    // 4. Construct System Prompt
-    // Base prompt without notes
-    let systemPrompt = `You are Memo, a personal memory assistant.
+    // Format notes for context
+    const notesContext = notesData?.map((n: any) => `- ${n.content}`).join('\n') || "No notes yet."
+
+    // 4. Construct Prompt for Grok
+    const systemPrompt = `You are Memo, a personal memory assistant.
+    
 Your goal is to chat with the user AND extract important personal information to save to their notes.
-
-INSTRUCTIONS:
-1. Answer the user's question or chat naturally.
-2. If the user provides NEW personal information (e.g., "My name is Alice", "I like sushi"), extract it.
-3. You MUST return a valid JSON object.
-
-JSON FORMAT:
-{
-  "reply": "Your response...",
-  "new_notes": ["Note 1"]
-}`
-
-    // Only inject notes if they exist
-    if (notesData && notesData.length > 0) {
-        const notesContext = notesData.map((n: any) => `- ${n.content}`).join('\n');
-        systemPrompt = `You are Memo, a personal memory assistant.
-Your goal is to chat with the user AND extract important personal information to save to their notes.
-
+    
 CURRENT NOTES (Memory):
 ${notesContext}
 
 INSTRUCTIONS:
 1. Answer the user's question or chat naturally based on the Current Notes.
-2. If the user provides NEW personal information, extract it.
-3. You MUST return a valid JSON object.
-
+2. If the user provides NEW personal information (e.g., "My name is Alice", "I like sushi", "I have a meeting on Friday"), extract it.
+3. You MUST return a valid JSON object. Do not return markdown code blocks.
+    
 JSON FORMAT:
 {
-  "reply": "Your response...",
-  "new_notes": ["Note 1"]
+  "reply": "Your response to the user...",
+  "new_notes": ["Note 1", "Note 2"] // Array of strings. Empty if no new info.
 }`
-    }
 
     const messages = [
       { role: "system", content: systemPrompt },
@@ -117,7 +102,7 @@ JSON FORMAT:
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-beta",
+        model: "grok-4-1-fast-non-reasoning", // Using a reliable model ID
         messages,
         stream: false,
         temperature: 0.7,
@@ -136,10 +121,12 @@ JSON FORMAT:
     // 6. Parse JSON Response
     let parsed;
     try {
+      // Clean up markdown code blocks if present
       const cleanContent = rawContent.replace(/```json\n?|\n?```/g, "").trim();
       parsed = JSON.parse(cleanContent);
     } catch (e) {
       console.error("Failed to parse JSON:", rawContent)
+      // Fallback: treat whole response as reply
       parsed = { reply: rawContent, new_notes: [] }
     }
 
@@ -154,12 +141,14 @@ JSON FORMAT:
         content: note
       }))
       
-      const { data: insertedNotes } = await supabase
+      const { data: insertedNotes, error: insertError } = await supabase
         .from('notes')
         .insert(notesToInsert)
         .select()
       
-      if (insertedNotes) savedNotes = insertedNotes
+      if (!insertError && insertedNotes) {
+        savedNotes = insertedNotes
+      }
     }
 
     return json({ reply, saved_notes: savedNotes })
@@ -167,4 +156,3 @@ JSON FORMAT:
   } catch (e: any) {
     return json({ error: String(e?.message ?? e) }, 500)
   }
-})
