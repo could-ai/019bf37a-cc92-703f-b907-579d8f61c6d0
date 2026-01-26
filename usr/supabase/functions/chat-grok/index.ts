@@ -20,77 +20,81 @@ const json = (obj: unknown, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   })
 
+async function getAuthedUser(req: Request) {
+  const authHeader = req.headers.get("Authorization") || req.headers.get("authorization")
+  if (!authHeader?.toLowerCase().startsWith("bearer ")) return null
+
+  const supabase = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+  })
+
+  const { data, error } = await supabase.auth.getUser()
+  if (error) return null
+  return { user: data.user, supabase } // Return client too for DB ops
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
   try {
-    // 1. Initialize Supabase Client with User's Auth Header
-    // This uses the standard Supabase Auth mechanism (getUser) instead of manual JWT verification
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const supabase = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    // 1. Auth Check using User's pattern
+    const authResult = await getAuthedUser(req)
+    if (!authResult || !authResult.user || authResult.user.role !== "authenticated") {
+      return json({ error: "Unauthorized" }, 401)
+    }
+    const { user, supabase } = authResult
 
-    // 2. Verify User
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      console.error("Auth Error:", authError);
-      return json({ error: "Unauthorized" }, 401);
+    // 2. Parse Input
+    const body = await req.json().catch(() => null)
+    // Support both 'content' (Flutter app) and 'messages' (User snippet style)
+    let userMessage = ""
+    if (body.content) {
+      userMessage = body.content
+    } else if (body.messages && Array.isArray(body.messages)) {
+      // Extract last user message if sending full history
+      const lastMsg = body.messages[body.messages.length - 1]
+      if (lastMsg.role === 'user') userMessage = lastMsg.content
     }
 
-    // 3. Parse Request Body
-    const body = await req.json().catch(() => ({}));
-    const userContent = body.content; 
-
-    if (!userContent || typeof userContent !== 'string') {
-      return json({ error: "Missing or invalid 'content' field" }, 400);
+    if (!userMessage || typeof userMessage !== "string") {
+      return json({ error: "content must be a non-empty string" }, 400)
     }
 
-    // 4. Fetch User's Notes (Memory)
-    // We fetch ALL notes as requested to provide full context
-    const { data: notes, error: notesError } = await supabase
+    // 3. Fetch Notes (Memory)
+    const { data: notesData, error: notesError } = await supabase
       .from('notes')
       .select('content')
-      .order('created_at', { ascending: true });
-
-    if (notesError) {
-      console.error("Notes Fetch Error:", notesError);
-      return json({ error: "Failed to fetch memory" }, 500);
-    }
-
-    const notesList = notes?.map(n => n.content) || [];
-    const notesContext = notesList.length > 0 
-      ? notesList.join("\n- ") 
-      : "No previous notes.";
-
-    // 5. Construct Prompt for Grok
-    const systemPrompt = `You are Memo, an intelligent personal assistant.
+      .order('created_at', { ascending: true })
     
-YOUR GOAL:
-1. Answer the user's message helpfully.
-2. Identify if the user provided any NEW personal information, facts, or reminders that should be saved to memory.
+    // Format notes for context
+    const notesContext = notesData?.map((n: any) => `- ${n.content}`).join('\n') || "No notes yet."
 
-CURRENT MEMORY (Notes):
-- ${notesContext}
+    // 4. Construct Prompt for Grok
+    const systemPrompt = `You are Memo, a personal memory assistant.
+    
+Your goal is to chat with the user AND extract important personal information to save to their notes.
+    
+CURRENT NOTES (Memory):
+${notesContext}
 
-OUTPUT FORMAT:
-You must respond in strict JSON format:
+INSTRUCTIONS:
+1. Answer the user's question or chat naturally based on the Current Notes.
+2. If the user provides NEW personal information (e.g., "My name is Alice", "I like sushi", "I have a meeting on Friday"), extract it.
+3. You MUST return a valid JSON object. Do not return markdown code blocks.
+    
+JSON FORMAT:
 {
-  "reply": "Your response to the user here.",
-  "new_notes": ["Note 1", "Note 2"] 
-}
-If there are no new notes to save, "new_notes" should be an empty array [].
-Do not include markdown formatting (like \`\`\`json). Just the raw JSON string.`;
+  "reply": "Your response to the user...",
+  "new_notes": ["Note 1", "Note 2"] // Array of strings. Empty if no new info.
+}`
 
     const messages = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userContent }
-    ];
+      { role: "user", content: userMessage }
+    ]
 
-    // 6. Call Grok API
-    // Using grok-beta for better JSON support, or falling back to the fast model if needed.
-    // Given the requirement for structured output, a smarter model is preferred.
+    // 5. Call Grok
     const resp = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -98,62 +102,58 @@ Do not include markdown formatting (like \`\`\`json). Just the raw JSON string.`
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-beta", 
+        model: "grok-beta", // Using a reliable model ID
         messages,
         stream: false,
-        temperature: 0.3,
-        response_format: { type: "json_object" }
+        temperature: 0.7,
       }),
-    });
+    })
 
     if (!resp.ok) {
-      const text = await resp.text();
-      console.error("Grok API Error:", text);
-      return json({ error: `AI Provider Error: ${resp.status}` }, 500);
+      const text = await resp.text()
+      return json({ error: `AI Provider Error: ${resp.status}`, details: text }, 500)
     }
 
-    const data = await resp.json();
-    const rawContent = data?.choices?.[0]?.message?.content;
+    const data = await resp.json()
+    const rawContent = data?.choices?.[0]?.message?.content
+    if (!rawContent) return json({ error: "Empty response from AI" }, 500)
 
-    if (!rawContent) return json({ error: "Empty response from AI" }, 500);
-
-    // 7. Parse AI Response
-    let parsedResponse;
+    // 6. Parse JSON Response
+    let parsed;
     try {
-      parsedResponse = JSON.parse(rawContent);
+      // Clean up markdown code blocks if present
+      const cleanContent = rawContent.replace(/```json\n?|\n?```/g, "").trim();
+      parsed = JSON.parse(cleanContent);
     } catch (e) {
-      console.error("JSON Parse Error:", e, rawContent);
-      // Fallback if AI didn't return JSON
-      parsedResponse = { 
-        reply: rawContent, 
-        new_notes: [] 
-      };
+      console.error("Failed to parse JSON:", rawContent)
+      // Fallback: treat whole response as reply
+      parsed = { reply: rawContent, new_notes: [] }
     }
 
-    // 8. Save New Notes
-    const newNotes = parsedResponse.new_notes;
-    if (Array.isArray(newNotes) && newNotes.length > 0) {
-      const notesToInsert = newNotes.map(note => ({
+    const reply = parsed.reply || rawContent
+    const newNotes = Array.isArray(parsed.new_notes) ? parsed.new_notes : []
+
+    // 7. Save New Notes
+    let savedNotes = []
+    if (newNotes.length > 0) {
+      const notesToInsert = newNotes.map((note: string) => ({
         user_id: user.id,
         content: note
-      }));
-
-      const { error: insertError } = await supabase
-        .from('notes')
-        .insert(notesToInsert);
+      }))
       
-      if (insertError) {
-        console.error("Notes Insert Error:", insertError);
+      const { data: insertedNotes, error: insertError } = await supabase
+        .from('notes')
+        .insert(notesToInsert)
+        .select()
+      
+      if (!insertError && insertedNotes) {
+        savedNotes = insertedNotes
       }
     }
 
-    return json({ 
-      reply: parsedResponse.reply,
-      saved_notes: newNotes 
-    });
+    return json({ reply, saved_notes: savedNotes })
 
-  } catch (e) {
-    console.error("Server Error:", e);
-    return json({ error: String(e?.message ?? e) }, 500);
+  } catch (e: any) {
+    return json({ error: String(e?.message ?? e) }, 500)
   }
-});
+})
