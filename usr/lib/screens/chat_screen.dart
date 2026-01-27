@@ -74,11 +74,13 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
           _isLoading = false;
         });
         
-        // Scroll to bottom immediately after loading
+        // Scroll to bottom after loading messages with a small delay to ensure ListView is fully built
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          }
+          Future.delayed(const Duration(milliseconds: 50), () {
+            if (_scrollController.hasClients) {
+              _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+            }
+          });
         });
       }
     } catch (e) {
@@ -260,8 +262,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
-            ),
-          ),
+            ),n          ),
         );
       }
     } finally {
@@ -360,7 +361,9 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
               width: 30,
               height: 30,
               decoration: BoxDecoration(
-                color: isDark ? Colors.blue.shade900.withOpacity(0.3) : Colors.blue.shade50,
+                color: isDark 
+                    ? Colors.blue.shade900.withOpacity(0.3) 
+                    : Colors.blue.shade50,
                 shape: BoxShape.circle,
               ),
               child: Icon(
