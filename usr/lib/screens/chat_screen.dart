@@ -135,7 +135,14 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       print('Error saving message: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving message: $e')),
+          SnackBar(
+            content: Text('Error saving message: $e'),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
         );
       }
     }
@@ -262,7 +269,8 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
-            ),n          ),
+            ),
+          ),
         );
       }
     } finally {
