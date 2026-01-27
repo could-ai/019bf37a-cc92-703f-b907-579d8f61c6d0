@@ -30,6 +30,16 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     super.initState();
     _loadMessages();
     _initSpeech();
+    _textController.addListener(() {
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   void _initSpeech() async {
@@ -346,24 +356,25 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             padding: const EdgeInsets.all(8.0),
             child: Row(
               children: [
-                IconButton(
-                  icon: Icon(_isListening ? Icons.mic : Icons.mic_none),
-                  color: _isListening ? Colors.red : null,
-                  onPressed: _isListening ? _stopListening : _startListening,
-                ),
                 Expanded(
                   child: TextField(
                     controller: _textController,
                     decoration: const InputDecoration(
-                      hintText: 'Type a message...',
+                      hintText: 'Tell or ask Memo something',
                       border: OutlineInputBorder(),
                     ),
                     onSubmitted: _handleSubmitted,
                   ),
                 ),
+                const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: () => _handleSubmitted(_textController.text),
+                  icon: _textController.text.isEmpty
+                      ? Icon(_isListening ? Icons.mic : Icons.mic_none)
+                      : const Icon(Icons.send),
+                  color: _isListening ? Colors.red : null,
+                  onPressed: _textController.text.isEmpty
+                      ? (_isListening ? _stopListening : _startListening)
+                      : () => _handleSubmitted(_textController.text),
                 ),
               ],
             ),
