@@ -74,8 +74,12 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
           _isLoading = false;
         });
         
-        // Scroll to bottom after loading
-        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+        // Scroll to bottom immediately after loading
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollController.hasClients) {
+            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          }
+        });
       }
     } catch (e) {
       print('Error loading messages: $e');
@@ -89,11 +93,16 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      // Small delay to ensure the new item is rendered before scrolling
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     }
   }
 
@@ -143,6 +152,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       setState(() {
         _isAiThinking = true;
       });
+      _scrollToBottom(); // Scroll to show thinking indicator
     }
 
     try {
@@ -151,22 +161,17 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         throw Exception('User not logged in');
       }
 
-      // Updated: Send only the current message content, not the full history.
-      // The backend now handles fetching 'notes' context.
       final response = await _supabase.functions.invoke(
         'chat-grok',
         body: {'content': userMessage},
       );
 
       if (response.status != 200) {
-        // Handle non-200 responses
         String errorMessage = 'Function error: ${response.status}';
         try {
-          // Try to parse error details if available
           if (response.data is Map && response.data['error'] != null) {
             errorMessage = response.data['error'];
           } else if (response.data is String) {
-             // Sometimes data is a string (e.g. plain text error)
              errorMessage = response.data;
           }
         } catch (_) {}
@@ -183,7 +188,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         final aiReply = data['reply'] as String;
         await _saveMessage(aiReply, false);
         
-        // Optional: Show a small indicator if notes were saved
         if (data['saved_notes'] != null && (data['saved_notes'] as List).isNotEmpty) {
            if (mounted) {
              ScaffoldMessenger.of(context).showSnackBar(
@@ -215,7 +219,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     } on FunctionException catch (e) {
       print('Function Error: ${e.status} ${e.details} ${e.reasonPhrase}');
       if (mounted) {
-        // Handle 401 specifically
         if (e.status == 401) {
            ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -234,7 +237,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             ),
           );
         } else {
-          // Show general error
           String msg = e.reasonPhrase ?? 'Unknown error';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -267,6 +269,8 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         setState(() {
           _isAiThinking = false;
         });
+        // Scroll again to show the full response
+        _scrollToBottom();
       }
     }
   }
@@ -334,29 +338,50 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         backgroundColor: isDark ? Colors.grey.shade900 : Colors.white,
         elevation: 0,
         centerTitle: true,
-        title: Text(
-          'Memo',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: isDark ? Colors.white : Colors.black,
-            letterSpacing: -0.4,
+        // Notes icon moved to leading (left side)
+        leading: IconButton(
+          icon: Icon(
+            Icons.history_edu,
+            color: isDark ? Colors.blue.shade400 : Colors.blue,
+            size: 22,
           ),
+          tooltip: 'Memories',
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const NotesScreen()),
+            );
+          },
+        ),
+        // Title with Icon + Text
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.blue.shade900.withOpacity(0.3) : Colors.blue.shade50,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.psychology,
+                size: 18,
+                color: isDark ? Colors.blue.shade400 : Colors.blue.shade700,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Memo',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : Colors.black,
+                letterSpacing: -0.4,
+              ),
+            ),
+          ],
         ),
         actions: [
-          IconButton(
-            icon: Icon(
-              Icons.history_edu,
-              color: isDark ? Colors.blue.shade400 : Colors.blue,
-              size: 22,
-            ),
-            tooltip: 'Memories',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const NotesScreen()),
-              );
-            },
-          ),
           IconButton(
             icon: Icon(
               Icons.logout,
