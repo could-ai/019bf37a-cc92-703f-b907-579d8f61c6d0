@@ -346,7 +346,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         actions: [
           IconButton(
             icon: Icon(
-              Icons.book_outlined,
+              Icons.history_edu,
               color: isDark ? Colors.blue.shade400 : Colors.blue,
               size: 22,
             ),
@@ -359,7 +359,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
           ),
           IconButton(
             icon: Icon(
-              Icons.person_outline,
+              Icons.logout,
               color: isDark ? Colors.blue.shade400 : Colors.blue,
               size: 22,
             ),
@@ -424,7 +424,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                                   : MainAxisAlignment.start,
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                if (!isUser) ..[
+                                if (!isUser) ...[
                                   // AI Avatar
                                   Container(
                                     width: 28,
