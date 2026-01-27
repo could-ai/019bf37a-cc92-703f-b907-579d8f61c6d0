@@ -53,7 +53,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     });
   }
 
-  void _initSpeech() async {
+  Future<void> _initSpeech() async {
     try {
       _speechEnabled = await _speech.initialize(
         onStatus: (status) {
