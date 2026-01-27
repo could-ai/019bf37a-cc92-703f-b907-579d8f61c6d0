@@ -187,10 +187,20 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         if (data['saved_notes'] != null && (data['saved_notes'] as List).isNotEmpty) {
            if (mounted) {
              ScaffoldMessenger.of(context).showSnackBar(
-               const SnackBar(
-                 content: Text('Memo updated new information!'),
-                 duration: Duration(seconds: 2),
-                 backgroundColor: Colors.green,
+               SnackBar(
+                 content: const Row(
+                   children: [
+                     Icon(Icons.check_circle, color: Colors.white, size: 20),
+                     SizedBox(width: 8),
+                     Text('Memory updated'),
+                   ],
+                 ),
+                 duration: const Duration(seconds: 2),
+                 backgroundColor: Colors.green.shade600,
+                 behavior: SnackBarBehavior.floating,
+                 shape: RoundedRectangleBorder(
+                   borderRadius: BorderRadius.circular(10),
+                 ),
                ),
              );
            }
@@ -210,8 +220,12 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
            ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('Session expired. Please login again.'), 
-              backgroundColor: Colors.red,
+              backgroundColor: Colors.red.shade600,
               duration: const Duration(seconds: 5),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
               action: SnackBarAction(
                 label: 'Logout', 
                 onPressed: _signOut,
@@ -225,7 +239,11 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('AI Error: $msg'), 
-              backgroundColor: Colors.red
+              backgroundColor: Colors.red.shade600,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
           );
         }
@@ -234,7 +252,14 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       print('AI Error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error getting AI response: $e')),
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
         );
       }
     } finally {
@@ -300,12 +325,31 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDark ? Colors.black : const Color(0xFFF2F2F7);
+    
     return Scaffold(
+      backgroundColor: backgroundColor,
       appBar: AppBar(
-        title: const Text('Memo'),
+        backgroundColor: isDark ? Colors.grey.shade900 : Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        title: Text(
+          'Memo',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: isDark ? Colors.white : Colors.black,
+            letterSpacing: -0.4,
+          ),
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.history_edu),
+            icon: Icon(
+              Icons.book_outlined,
+              color: isDark ? Colors.blue.shade400 : Colors.blue,
+              size: 22,
+            ),
             tooltip: 'Memories',
             onPressed: () {
               Navigator.of(context).push(
@@ -314,79 +358,270 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.logout),
+            icon: Icon(
+              Icons.person_outline,
+              color: isDark ? Colors.blue.shade400 : Colors.blue,
+              size: 22,
+            ),
+            tooltip: 'Sign Out',
             onPressed: _signOut,
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: Column(
         children: [
+          // Messages List
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _messages.isEmpty
                     ? Center(
-                        child: Text(
-                          'Tell or ask Memo something...',
-                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                color: Colors.grey,
+                        child: Padding(
+                          padding: const EdgeInsets.all(32.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.chat_bubble_outline,
+                                size: 64,
+                                color: isDark 
+                                    ? Colors.grey.shade700 
+                                    : Colors.grey.shade400,
                               ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Tell or ask Memo something',
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  color: isDark 
+                                      ? Colors.grey.shade600 
+                                      : Colors.grey.shade500,
+                                  letterSpacing: -0.4,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
                         ),
                       )
                     : ListView.builder(
                         controller: _scrollController,
-                        padding: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         itemCount: _messages.length,
                         itemBuilder: (context, index) {
                           final message = _messages[index];
                           final isUser = message['is_user'] as bool;
-                          return Align(
-                            alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: isUser
-                                    ? Theme.of(context).colorScheme.primaryContainer
-                                    : Theme.of(context).colorScheme.secondaryContainer,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(message['content'] as String),
+                          final isLastMessage = index == _messages.length - 1;
+                          
+                          return Padding(
+                            padding: EdgeInsets.only(
+                              bottom: isLastMessage ? 8 : 12,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: isUser 
+                                  ? MainAxisAlignment.end 
+                                  : MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                if (!isUser) ..[
+                                  // AI Avatar
+                                  Container(
+                                    width: 28,
+                                    height: 28,
+                                    margin: const EdgeInsets.only(right: 8, bottom: 2),
+                                    decoration: BoxDecoration(
+                                      color: isDark 
+                                          ? Colors.grey.shade800 
+                                          : Colors.grey.shade300,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      Icons.psychology,
+                                      size: 16,
+                                      color: isDark 
+                                          ? Colors.blue.shade400 
+                                          : Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ],
+                                // Message Bubble
+                                Flexible(
+                                  child: Container(
+                                    constraints: BoxConstraints(
+                                      maxWidth: MediaQuery.of(context).size.width * 0.75,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isUser
+                                          ? (isDark 
+                                              ? Colors.blue.shade700 
+                                              : Colors.blue)
+                                          : (isDark 
+                                              ? Colors.grey.shade800 
+                                              : Colors.white),
+                                      borderRadius: BorderRadius.circular(18),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Text(
+                                      message['content'] as String,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        height: 1.4,
+                                        color: isUser
+                                            ? Colors.white
+                                            : (isDark ? Colors.white : Colors.black87),
+                                        letterSpacing: -0.3,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           );
                         },
                       ),
           ),
+          
+          // AI Thinking Indicator
           if (_isAiThinking)
-            const Padding(
-              padding: EdgeInsets.all(8.0),
-              child: LinearProgressIndicator(),
-            ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    decoration: const InputDecoration(
-                      hintText: 'Tell or ask Memo something',
-                      border: OutlineInputBorder(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 28,
+                    height: 28,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
+                      shape: BoxShape.circle,
                     ),
-                    onSubmitted: _handleSubmitted,
+                    child: Icon(
+                      Icons.psychology,
+                      size: 16,
+                      color: isDark ? Colors.blue.shade400 : Colors.blue.shade700,
+                    ),
                   ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.grey.shade800 : Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              isDark ? Colors.blue.shade400 : Colors.blue,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Thinking...',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          
+          // Input Bar
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? Colors.grey.shade900 : Colors.white,
+              border: Border(
+                top: BorderSide(
+                  color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
+                  width: 0.5,
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: _textController.text.isEmpty
-                      ? Icon(_isListening ? Icons.mic : Icons.mic_none)
-                      : const Icon(Icons.send),
-                  color: _isListening ? Colors.red : null,
-                  onPressed: _textController.text.isEmpty
-                      ? (_isListening ? _stopListening : _startListening)
-                      : () => _handleSubmitted(_textController.text),
-                ),
-              ],
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  // Text Input
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.grey.shade800 : const Color(0xFFF2F2F7),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: TextField(
+                        controller: _textController,
+                        decoration: InputDecoration(
+                          hintText: 'Tell or ask Memo something',
+                          hintStyle: TextStyle(
+                            fontSize: 16,
+                            color: isDark ? Colors.grey.shade500 : Colors.grey.shade600,
+                            letterSpacing: -0.3,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: isDark ? Colors.white : Colors.black,
+                          letterSpacing: -0.3,
+                        ),
+                        maxLines: null,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: _handleSubmitted,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Send/Mic Button
+                  GestureDetector(
+                    onTap: _textController.text.isEmpty
+                        ? (_isListening ? _stopListening : _startListening)
+                        : () => _handleSubmitted(_textController.text),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: _textController.text.isEmpty
+                            ? (isDark ? Colors.grey.shade800 : const Color(0xFFF2F2F7))
+                            : (isDark ? Colors.blue.shade600 : Colors.blue),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        _textController.text.isEmpty
+                            ? (_isListening ? Icons.mic : Icons.mic_none)
+                            : Icons.arrow_upward,
+                        color: _textController.text.isEmpty
+                            ? (isDark ? Colors.grey.shade400 : Colors.grey.shade700)
+                            : Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
