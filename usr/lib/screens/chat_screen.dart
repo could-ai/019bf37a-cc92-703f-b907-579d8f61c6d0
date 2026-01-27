@@ -17,6 +17,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   final SupabaseClient _supabase = Supabase.instance.client;
   final ScrollController _scrollController = ScrollController();
   
+  // Messages will be stored with newest first (index 0 = newest)
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
   bool _isAiThinking = false;
@@ -62,26 +63,20 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       final userId = _supabase.auth.currentUser?.id;
       if (userId == null) return;
 
+      // Fetch messages ordered by created_at descending (newest first)
+      // This works with ListView(reverse: true) where index 0 is at the bottom
       final data = await _supabase
           .from('messages')
           .select()
           .eq('user_id', userId)
-          .order('created_at', ascending: true);
+          .order('created_at', ascending: false);
 
       if (mounted) {
         setState(() {
           _messages = List<Map<String, dynamic>>.from(data);
           _isLoading = false;
         });
-        
-        // Scroll to bottom after loading messages with a small delay to ensure ListView is fully built
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          Future.delayed(const Duration(milliseconds: 50), () {
-            if (_scrollController.hasClients) {
-              _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-            }
-          });
-        });
+        // No need to scroll manually on load because reverse: true starts at scroll offset 0 (bottom)
       }
     } catch (e) {
       print('Error loading messages: $e');
@@ -93,18 +88,14 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     }
   }
 
-  void _scrollToBottom() {
+  void _scrollToNewest() {
     if (_scrollController.hasClients) {
-      // Small delay to ensure the new item is rendered before scrolling
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+      // With reverse: true, 0.0 is the bottom (newest message)
+      _scrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
     }
   }
 
@@ -127,9 +118,10 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
       if (mounted) {
         setState(() {
-          _messages.add(response);
+          // Insert at the beginning (index 0) because list is reversed
+          _messages.insert(0, response);
         });
-        _scrollToBottom();
+        _scrollToNewest();
       }
     } catch (e) {
       print('Error saving message: $e');
@@ -161,7 +153,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       setState(() {
         _isAiThinking = true;
       });
-      _scrollToBottom(); // Scroll to show thinking indicator
+      _scrollToNewest(); // Scroll to show thinking indicator (which is at the bottom)
     }
 
     try {
@@ -278,8 +270,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         setState(() {
           _isAiThinking = false;
         });
-        // Scroll again to show the full response
-        _scrollToBottom();
+        _scrollToNewest();
       }
     }
   }
@@ -443,12 +434,73 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                       )
                     : ListView.builder(
                         controller: _scrollController,
+                        reverse: true, // Start from bottom
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        itemCount: _messages.length,
+                        itemCount: _messages.length + (_isAiThinking ? 1 : 0),
                         itemBuilder: (context, index) {
+                          // Handle thinking indicator as the first item (index 0) when visible
+                          if (_isAiThinking) {
+                            if (index == 0) {
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 28,
+                                      height: 28,
+                                      margin: const EdgeInsets.only(right: 8),
+                                      decoration: BoxDecoration(
+                                        color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        Icons.psychology,
+                                        size: 16,
+                                        color: isDark ? Colors.blue.shade400 : Colors.blue.shade700,
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: isDark ? Colors.grey.shade800 : Colors.white,
+                                        borderRadius: BorderRadius.circular(18),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SizedBox(
+                                            width: 12,
+                                            height: 12,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor: AlwaysStoppedAnimation<Color>(
+                                                isDark ? Colors.blue.shade400 : Colors.blue,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'Thinking...',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                            // Adjust index for messages
+                            index = index - 1;
+                          }
+
                           final message = _messages[index];
                           final isUser = message['is_user'] as bool;
-                          final isLastMessage = index == _messages.length - 1;
+                          // In reversed list, index 0 is the bottom-most (newest) message
+                          final isLastMessage = index == 0;
                           
                           return Padding(
                             padding: EdgeInsets.only(
@@ -527,60 +579,6 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                         },
                       ),
           ),
-          
-          // AI Thinking Indicator
-          if (_isAiThinking)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              child: Row(
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.psychology,
-                      size: 16,
-                      color: isDark ? Colors.blue.shade400 : Colors.blue.shade700,
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.grey.shade800 : Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              isDark ? Colors.blue.shade400 : Colors.blue,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Thinking...',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
           
           // Input Bar
           Container(
