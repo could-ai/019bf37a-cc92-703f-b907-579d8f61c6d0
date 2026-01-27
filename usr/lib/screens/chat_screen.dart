@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'dart:convert'; // For jsonDecode
+import 'notes_screen.dart';
 
 class MemoChatScreen extends StatefulWidget {
   const MemoChatScreen({super.key});
@@ -303,6 +304,15 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       appBar: AppBar(
         title: const Text('Memo'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history_edu),
+            tooltip: 'Memories',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NotesScreen()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _signOut,
