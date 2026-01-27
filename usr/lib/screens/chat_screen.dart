@@ -308,12 +308,10 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
 
   // Speech functions
   void _startListening() async {
+    await _initSpeech();
     if (!_speechEnabled) {
-      await _initSpeech();
-      if (!_speechEnabled) {
-        // Speech not available
-        return;
-      }
+      // Speech not available
+      return;
     }
     
     await _speech.listen(
@@ -374,7 +372,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         // Notes icon moved to leading (left side)
         leading: IconButton(
           icon: Icon(
-            Icons.history_edu,
+            Icons.book_outlined,
             color: isDark ? Colors.blue.shade400 : Colors.blue,
             size: 22,
           ),
@@ -385,7 +383,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
             );
           },
         ),
-        // Title with Icon + Text
+        // Title with Icon + Text (matching AuthScreen)
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
