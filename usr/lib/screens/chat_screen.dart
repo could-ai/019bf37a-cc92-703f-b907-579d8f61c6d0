@@ -26,28 +26,45 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
   bool _speechEnabled = false;
+  bool _isUserTyping = false; // Track if user is manually typing
 
   @override
   void initState() {
     super.initState();
     _loadMessages();
     _initSpeech();
-    _textController.addListener(() {
-      setState(() {});
-    });
+    _textController.addListener(_onTextChanged);
   }
 
   @override
   void dispose() {
+    _textController.removeListener(_onTextChanged);
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
+  void _onTextChanged() {
+    // Only update UI if the change is significant (has content or just cleared)
+    final hasText = _textController.text.isNotEmpty;
+    setState(() {
+      // User is typing if they manually added text and not listening
+      _isUserTyping = hasText && !_isListening;
+    });
+  }
+
   void _initSpeech() async {
     try {
       _speechEnabled = await _speech.initialize(
-        onStatus: (status) => print('Speech status: $status'),
+        onStatus: (status) {
+          print('Speech status: $status');
+          // When speech ends naturally, stop listening
+          if (status == 'done' || status == 'notListening') {
+            if (_isListening) {
+              _stopListening();
+            }
+          }
+        },
         onError: (errorNotification) => print('Speech error: $errorNotification'),
       );
       if (mounted) {
@@ -144,6 +161,9 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     if (text.trim().isEmpty) return;
 
     _textController.clear();
+    setState(() {
+      _isUserTyping = false; // Reset typing state after sending
+    });
     await _saveMessage(text, true);
     await _getAiResponse(text);
   }
@@ -289,7 +309,11 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
   // Speech functions
   void _startListening() async {
     if (!_speechEnabled) {
-      _initSpeech();
+      await _initSpeech();
+      if (!_speechEnabled) {
+        // Speech not available
+        return;
+      }
     }
     
     await _speech.listen(
@@ -301,6 +325,7 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
     if (mounted) {
       setState(() {
         _isListening = true;
+        _isUserTyping = false; // Clear user typing state when starting voice input
       });
     }
   }
@@ -311,6 +336,12 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
       setState(() {
         _isListening = false;
       });
+      
+      // Submit the recognized text if there is any
+      final text = _textController.text.trim();
+      if (text.isNotEmpty) {
+        _handleSubmitted(text);
+      }
     }
   }
 
@@ -320,17 +351,19 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
         _textController.text = result.recognizedWords;
       });
     }
-    
-    if (result.finalResult) {
-      _handleSubmitted(result.recognizedWords);
-      _stopListening();
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final backgroundColor = isDark ? Colors.black : const Color(0xFFF2F2F7);
+    
+    // Determine button state:
+    // - Show send button only when user is manually typing (not from voice input)
+    // - Show stop button when listening
+    // - Show mic button otherwise
+    final bool showSendButton = _isUserTyping && _textController.text.isNotEmpty;
+    final bool showStopButton = _isListening;
     
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -625,31 +658,45 @@ class _MemoChatScreenState extends State<MemoChatScreen> {
                         maxLines: null,
                         textInputAction: TextInputAction.send,
                         onSubmitted: _handleSubmitted,
+                        enabled: !_isListening, // Disable input while listening
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Send/Mic Button
+                  // Send/Stop/Mic Button
                   GestureDetector(
-                    onTap: _textController.text.isEmpty
-                        ? (_isListening ? _stopListening : _startListening)
-                        : () => _handleSubmitted(_textController.text),
+                    onTap: () {
+                      if (showSendButton) {
+                        // Send message
+                        _handleSubmitted(_textController.text);
+                      } else if (showStopButton) {
+                        // Stop listening
+                        _stopListening();
+                      } else {
+                        // Start listening
+                        _startListening();
+                      }
+                    },
                     child: Container(
                       width: 36,
                       height: 36,
                       decoration: BoxDecoration(
-                        color: _textController.text.isEmpty
-                            ? (isDark ? Colors.grey.shade800 : const Color(0xFFF2F2F7))
-                            : (isDark ? Colors.blue.shade600 : Colors.blue),
+                        color: showSendButton
+                            ? (isDark ? Colors.blue.shade600 : Colors.blue)
+                            : showStopButton
+                                ? (isDark ? Colors.red.shade700 : Colors.red)
+                                : (isDark ? Colors.grey.shade800 : const Color(0xFFF2F2F7)),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
-                        _textController.text.isEmpty
-                            ? (_isListening ? Icons.mic : Icons.mic_none)
-                            : Icons.arrow_upward,
-                        color: _textController.text.isEmpty
-                            ? (isDark ? Colors.grey.shade400 : Colors.grey.shade700)
-                            : Colors.white,
+                        showSendButton
+                            ? Icons.arrow_upward
+                            : showStopButton
+                                ? Icons.stop
+                                : Icons.mic_none,
+                        color: showSendButton || showStopButton
+                            ? Colors.white
+                            : (isDark ? Colors.grey.shade400 : Colors.grey.shade700),
                         size: 20,
                       ),
                     ),
