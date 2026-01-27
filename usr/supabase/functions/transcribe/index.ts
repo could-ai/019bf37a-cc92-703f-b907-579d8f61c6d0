@@ -34,7 +34,7 @@ serve(async (req) => {
 
     // Deepgram API Endpoint for pre-recorded audio
     // using nova-2 model which is fast and accurate
-    const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=multi'
+    const deepgramUrl =  "https://api.deepgram.com/v1/listen?model=flux-general-en&smart_format=true";
     
     console.log('Sending audio to Deepgram...')
 
