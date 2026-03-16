@@ -23,6 +23,12 @@ if (flutterVersionName == null) {
     localProperties["flutter.versionName"] = "1.0"
 }
 
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.example.couldai_user_app"
     compileSdk = flutter.compileSdkVersion
@@ -49,11 +55,20 @@ android {
         versionName = localProperties.getProperty("flutter.versionName") ?: "1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(keystoreProperties["storeFile"] as String)
+            storePassword = keystoreProperties["storePassword"] as String
+            keyAlias = keystoreProperties["keyAlias"] as String
+            keyPassword = keystoreProperties["keyPassword"] as String
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Signing with the release upload key from key.properties.
+            signingConfig = signingConfigs.getByName("release")
             isShrinkResources = false
             isMinifyEnabled = false
         }
