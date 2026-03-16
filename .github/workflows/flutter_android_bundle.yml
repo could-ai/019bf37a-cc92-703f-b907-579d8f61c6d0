@@ -64,9 +64,39 @@ jobs:
           # Verify whether the keystore contains the specified alias
           echo "Verifying if the keystore contains the alias: ${{ secrets.ANDROID_KEY_ALIAS }}"
           keytool -list -v -keystore keystore.jks -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" | grep -i "alias name: ${{ secrets.ANDROID_KEY_ALIAS }}"
+
+          # Fail fast if the configured keystore is a debug keystore
+          echo "Checking that the configured keystore is not a debug keystore..."
+          KEYSTORE_INFO="$(keytool -list -v -keystore keystore.jks -alias "${{ secrets.ANDROID_KEY_ALIAS }}" -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}")"
+          echo "$KEYSTORE_INFO" | grep -i "Owner:" || true
+          if echo "$KEYSTORE_INFO" | grep -qi "Owner: CN=Android Debug"; then
+            echo "::error::The configured Android keystore is a debug keystore. Upload a release upload keystore instead."
+            exit 1
+          fi
       - name: Build Android application
         working-directory: ./usr
         run: flutter build appbundle --release
+      - name: Verify Android app bundle signing
+        run: |
+          AAB_PATH=./usr/build/app/outputs/bundle/release/app-release.aab
+          if [ ! -f "$AAB_PATH" ]; then
+            echo "::error::Release app bundle not found at $AAB_PATH"
+            exit 1
+          fi
+
+          jarsigner -verify -verbose -certs "$AAB_PATH" > app-bundle-signing-report.txt 2>&1
+          echo "Verified app bundle signer:"
+          grep -E "jar verified|CN=" app-bundle-signing-report.txt || true
+
+          if grep -qi "CN=Android Debug" app-bundle-signing-report.txt; then
+            echo "::error::The generated app bundle is still signed with a debug certificate."
+            exit 1
+          fi
+
+          if ! grep -qi "jar verified" app-bundle-signing-report.txt; then
+            echo "::error::Unable to verify the generated app bundle signature."
+            exit 1
+          fi
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
