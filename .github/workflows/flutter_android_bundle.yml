@@ -76,7 +76,7 @@ jobs:
       - name: Build Android application
         working-directory: ./usr
         run: flutter build appbundle --release
-      - name: Verify Android app bundle signing
+      - name: Verify app bundle signing
         run: |
           AAB_PATH=./usr/build/app/outputs/bundle/release/app-release.aab
           if [ ! -f "$AAB_PATH" ]; then
